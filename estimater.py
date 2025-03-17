@@ -13,6 +13,7 @@ import itertools
 from learning.training.predict_score import *
 from learning.training.predict_pose_refine import *
 import yaml
+from time import time
 
 
 class FoundationPose:
@@ -25,6 +26,7 @@ class FoundationPose:
 
     self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh)
     self.make_rotation_grid(min_n_views=40, inplane_step=60)
+    #self.make_rotation_grid(min_n_views=40, inplane_step=110)
 
     self.glctx = glctx
 
@@ -104,8 +106,9 @@ class FoundationPose:
 
 
   def make_rotation_grid(self, min_n_views=40, inplane_step=60):
+    start_time = time()
     cam_in_obs = sample_views_icosphere(n_views=min_n_views)
-    logging.info(f'cam_in_obs:{cam_in_obs.shape}')
+    logging.info(f'mcam_in_obs:{cam_in_obs.shape}')
     rot_grid = []
     for i in range(len(cam_in_obs)):
       for inplane_rot in np.deg2rad(np.arange(0, 360, inplane_step)):
@@ -122,7 +125,7 @@ class FoundationPose:
     logging.info(f"after cluster, rot_grid:{rot_grid.shape}")
     self.rot_grid = torch.as_tensor(rot_grid, device='cuda', dtype=torch.float)
     logging.info(f"self.rot_grid: {self.rot_grid.shape}")
-
+    logging.info(f"\033[92mmake_rotation_grid time: {time()-start_time:.4f}\033[0m")
 
   def generate_random_pose_hypo(self, K, rgb, depth, mask, scene_pts=None):
     '''
@@ -166,7 +169,7 @@ class FoundationPose:
     if self.glctx is None:
       if glctx is None:
         self.glctx = dr.RasterizeCudaContext()
-        # self.glctx = dr.RasterizeGLContext()
+        #self.glctx = dr.RasterizeGLContext()
       else:
         self.glctx = glctx
 
@@ -200,25 +203,39 @@ class FoundationPose:
     self.ob_id = ob_id
     self.ob_mask = ob_mask
 
+    start_time_poses = time()
     poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None)
     poses = poses.data.cpu().numpy()
     logging.info(f'poses:{poses.shape}')
+    logging.info(f"\033[92mgenerate_random_pose_hypo time: {time()-start_time_poses:.4f}\033[0m")
+
+
+    start_time_guess_translation = time()
     center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
+    logging.info(f"\033[92mguess_translation time: {time()-start_time_guess_translation:.4f}\033[0m")
+
 
     poses = torch.as_tensor(poses, device='cuda', dtype=torch.float)
     poses[:,:3,3] = torch.as_tensor(center.reshape(1,3), device='cuda')
 
+    start_add_errs = time()
     add_errs = self.compute_add_err_to_gt_pose(poses)
     logging.info(f"after viewpoint, add_errs min:{add_errs.min()}")
+    logging.info(f"\033[92mcompute_add_err_to_gt_pose time: {time()-start_add_errs:.4f}\033[0m")
 
     xyz_map = depth2xyzmap(depth, K)
+    start_time_scorer = time()
     poses, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, xyz_map=xyz_map, glctx=self.glctx, mesh_diameter=self.diameter, iteration=iteration, get_vis=self.debug>=2)
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_refiner.png', vis)
 
+    logging.info(f"\033[92m refiner predict time: {time()-start_time_scorer:.4f}\033[0m")
+
+    start_time_scorer = time()
     scores, vis = self.scorer.predict(mesh=self.mesh, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, mesh_tensors=self.mesh_tensors, glctx=self.glctx, mesh_diameter=self.diameter, get_vis=self.debug>=2)
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_score.png', vis)
+    logging.info(f"\033[92ms refiner score time: {time()-start_time_scorer:.4f}\033[0m")
 
     add_errs = self.compute_add_err_to_gt_pose(poses)
     logging.info(f"final, add_errs min:{add_errs.min()}")
