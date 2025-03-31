@@ -1,6 +1,6 @@
 import importlib
 import math
-from typing import Optional, Tuple, TYPE_CHECKING, List
+from typing import Optional, Tuple, List
 import warnings
 
 import torch
@@ -10,42 +10,10 @@ from torch.overrides import (
     has_torch_function,
     has_torch_function_unary,
 )
-from torch._C import _add_docstr
 from torch._C._nn import scaled_dot_product_attention, linear
-from torch._torch_docs import sparse_support_notes
 
 
-if TYPE_CHECKING:
-    from torch.types import _dtype as DType
-else:
-    # The JIT doesn't understand Union, nor torch.dtype here
-    DType = int
-
-# linear = _add_docstr(
-#     torch._C._nn.linear,
-#     r"""
-# linear(input, weight, bias=None) -> Tensor
-
-# Applies a linear transformation to the incoming data: :math:`y = xA^T + b`.
-
-# This operation supports 2-D :attr:`weight` with :ref:`sparse layout<sparse-docs>`
-
-# {sparse_beta_warning}
-
-# This operator supports :ref:`TensorFloat32<tf32_on_ampere>`.
-
-# Shape:
-
-#     - Input: :math:`(*, in\_features)` where `*` means any number of
-#       additional dimensions, including none
-#     - Weight: :math:`(out\_features, in\_features)` or :math:`(in\_features)`
-#     - Bias: :math:`(out\_features)` or :math:`()`
-#     - Output: :math:`(*, out\_features)` or :math:`(*)`, based on the shape of the weight
-# """.format(
-#         **sparse_support_notes
-#     ),
-# )
-
+from torch.types import _dtype as DType
 
 def _in_projection_packed(
     q: Tensor,
@@ -847,7 +815,12 @@ def multi_head_attention_forward(
     if need_weights:
         # This is the part used in Linear Attention in our case
         _B, _Nt, E = q.shape
-        q_scaled = q * math.sqrt(1.0 / float(E))
+        # q_scaled = q * math.sqrt(1.0 / float(E))  # Dot-product version
+        # < Linear version
+        q_scaled = softmax(k, dim=-1)
+        k_scaled = softmax(k, dim=-1)
+        # >
+        # print(f"Q, K, V shapes: {q.shape, k.shape, v.shape}")
 
         assert not (
             is_causal and attn_mask is None
@@ -858,12 +831,17 @@ def multi_head_attention_forward(
                 attn_mask, q_scaled, k.transpose(-2, -1)
             )
         else:
-            attn_output_weights = torch.bmm(q_scaled, k.transpose(-2, -1))
-        attn_output_weights = softmax(attn_output_weights, dim=-1)
+            # This is the part used in Linear Attention in our case
+            # attn_output_weights = torch.bmm(q_scaled, k.transpose(-2, -1))
+            attn_intermediate_g = torch.bmm(k_scaled.transpose(-2, -1), v)
+            # print(f"Initial vs linear shapes: {attn_output_weights.shape, attn_intermediate_g.shape}")
+        # attn_output_weights = softmax(attn_output_weights, dim=-1)
         if dropout_p > 0.0:
-            attn_output_weights = dropout(attn_output_weights, p=dropout_p)
+            # attn_output_weights = dropout(attn_output_weights, p=dropout_p)
+            attn_intermediate_g = dropout(attn_intermediate_g, p=dropout_p)
 
-        attn_output = torch.bmm(attn_output_weights, v)
+        # attn_output = torch.bmm(attn_output_weights, v)  # Dot-product version
+        attn_output = torch.bmm(q_scaled, attn_intermediate_g)
 
         attn_output = (
             attn_output.transpose(0, 1).contiguous().view(
@@ -872,17 +850,22 @@ def multi_head_attention_forward(
         attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
         attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
 
-        # optionally average attention weights over heads
-        attn_output_weights = attn_output_weights.view(
-            bsz, num_heads, tgt_len, src_len)
-        if average_attn_weights:
-            attn_output_weights = attn_output_weights.mean(dim=1)
+        # Next lines are useless in our usecases (we don't need the 
+        # context matrix, and return G in second just to have something
+        # resembling the original signature of the function)
+        # # optionally average attention weights over heads
+        # attn_output_weights = attn_output_weights.view(
+        #     bsz, num_heads, tgt_len, src_len)
+        # if average_attn_weights:
+        #     attn_output_weights = attn_output_weights.mean(dim=1)
 
-        if not is_batched:
-            # squeeze the output if input was unbatched
-            attn_output = attn_output.squeeze(1)
-            attn_output_weights = attn_output_weights.squeeze(0)
-        return attn_output, attn_output_weights
+        # if not is_batched:
+        #     # squeeze the output if input was unbatched
+        #     attn_output = attn_output.squeeze(1)
+        #     attn_output_weights = attn_output_weights.squeeze(0)
+        # return attn_output, attn_output_weights
+
+        return attn_output, attn_intermediate_g
     else:
         # attn_mask can be either (L,S) or (N*num_heads, L, S)
         # if attn_mask's shape is (1, L, S) we need to unsqueeze to (1, 1, L, S)
