@@ -115,7 +115,7 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
 
 class ScorePredictor:
-  def __init__(self, amp=True):
+  def __init__(self, amp=True, use_linear_attention=False):
     self.amp = amp
     self.run_name = "2024-01-11-20-02-45"
 
@@ -145,7 +145,7 @@ class ScorePredictor:
     logging.info(f"self.cfg: \n {OmegaConf.to_yaml(self.cfg)}")
 
     self.dataset = ScoreMultiPairH5Dataset(cfg=self.cfg, mode='test', h5_file=None, max_num_key=1)
-    self.model = ScoreNetMultiPair(cfg=self.cfg, c_in=self.cfg['c_in']).cuda()
+    self.model = ScoreNetMultiPair(cfg=self.cfg, c_in=self.cfg['c_in'], use_linear_attention=use_linear_attention).cuda()
 
     logging.info(f"Using pretrained model from {ckpt_dir}")
     ckpt = torch.load(ckpt_dir)

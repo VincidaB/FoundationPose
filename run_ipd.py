@@ -21,6 +21,7 @@ if __name__=='__main__':
   parser.add_argument('--track_refine_iter', type=int, default=2)
   parser.add_argument('--debug', type=int, default=1)
   parser.add_argument('--debug_dir', type=str, default=f'{code_dir}/debug')
+  parser.add_argument('--use_linear_attention', type=bool, default=False)
   args = parser.parse_args()
 
   set_logging_format()
@@ -37,11 +38,11 @@ if __name__=='__main__':
   to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
   bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
 
-  scorer = ScorePredictor()
+  scorer = ScorePredictor(use_linear_attention=args.use_linear_attention)
   refiner = PoseRefinePredictor()
   glctx = dr.RasterizeCudaContext()
   est = FoundationPose(model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh, scorer=scorer, refiner=refiner, debug_dir=debug_dir, debug=debug, glctx=glctx)
-  #logging.info("estimator initialization done")
+  logging.info("estimator initialization done")
 
   reader = YcbineoatReader(video_dir=args.test_scene_dir, shorter_side=None, zfar=np.inf)
 

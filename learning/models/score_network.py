@@ -20,12 +20,12 @@ import torch.nn as nn
 import cv2
 from network_modules import *
 from Utils import *
-
+from linear_attention.custom_mha import LinearMultiheadAttention
 
 
 
 class ScoreNetMultiPair(nn.Module):
-  def __init__(self, cfg=None, c_in=4):
+  def __init__(self, cfg=None, c_in=4, use_linear_attention=False):
     super().__init__()
     self.cfg = cfg
     if self.cfg.use_BN:
@@ -50,8 +50,13 @@ class ScoreNetMultiPair(nn.Module):
 
     embed_dim = 512
     num_heads = 4
-    self.att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, bias=True, batch_first=True)
-    self.att_cross = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, bias=True, batch_first=True)
+    if use_linear_attention:
+      print("-=-=-=- Initializing Linear Attention -=-=-=-")
+      self.att = LinearMultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, bias=True, batch_first=True)
+      self.att_cross = LinearMultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, bias=True, batch_first=True)    
+    else:
+      self.att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, bias=True, batch_first=True)
+      self.att_cross = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, bias=True, batch_first=True)
 
     self.pos_embed = PositionalEmbedding(d_model=embed_dim, max_len=400)
     self.linear = nn.Linear(embed_dim, 1)
