@@ -11,6 +11,9 @@ from estimater import *
 from datareader import *
 import argparse
 
+from cProfile import Profile
+from pstats import SortKey, Stats
+
 
 if __name__=='__main__':
   parser = argparse.ArgumentParser()
@@ -45,39 +48,43 @@ if __name__=='__main__':
 
   reader = YcbineoatReader(video_dir=args.test_scene_dir, shorter_side=None, zfar=np.inf)
 
-  for i in range(len(reader.color_files)):
-    logging.info(f'i:{i}')
-    color = reader.get_color(i)
-    depth = reader.get_depth(i)
-    # scale depth by a factor of 0.1
-    depth = depth*0.1
-    if i==0:
-      mask = reader.get_mask(0).astype(bool)
-      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
+  with Profile() as profile:
+    for i in range(len(reader.color_files)):
+      logging.info(f'i:{i}')
+      color = reader.get_color(i)
+      depth = reader.get_depth(i)
+      # scale depth by a factor of 0.1
+      depth = depth*0.1
+      if i==0:
+        mask = reader.get_mask(0).astype(bool)
+        pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
 
-      if debug>=3:
-        m = mesh.copy()
-        m.apply_transform(pose)
-        m.export(f'{debug_dir}/model_tf.obj')
-        xyz_map = depth2xyzmap(depth, reader.K)
-        valid = depth>=0.001
-        pcd = toOpen3dCloud(xyz_map[valid], color[valid])
-        o3d.io.write_point_cloud(f'{debug_dir}/scene_complete.ply', pcd)
-    else:
-      pose = est.track_one(rgb=color, depth=depth, K=reader.K, iteration=args.track_refine_iter)
+        if debug>=3:
+          m = mesh.copy()
+          m.apply_transform(pose)
+          m.export(f'{debug_dir}/model_tf.obj')
+          xyz_map = depth2xyzmap(depth, reader.K)
+          valid = depth>=0.001
+          pcd = toOpen3dCloud(xyz_map[valid], color[valid])
+          o3d.io.write_point_cloud(f'{debug_dir}/scene_complete.ply', pcd)
+      else:
+        pose = est.track_one(rgb=color, depth=depth, K=reader.K, iteration=args.track_refine_iter)
 
-    os.makedirs(f'{debug_dir}/ob_in_cam', exist_ok=True)
-    np.savetxt(f'{debug_dir}/ob_in_cam/{reader.id_strs[i]}.txt', pose.reshape(4,4))
+      os.makedirs(f'{debug_dir}/ob_in_cam', exist_ok=True)
+      np.savetxt(f'{debug_dir}/ob_in_cam/{reader.id_strs[i]}.txt', pose.reshape(4,4))
 
-    if debug>=1:
-      center_pose = pose@np.linalg.inv(to_origin)
-      vis = draw_posed_3d_box(reader.K, img=color, ob_in_cam=center_pose, bbox=bbox)
-      vis = draw_xyz_axis(color, ob_in_cam=center_pose, scale=0.1, K=reader.K, thickness=3, transparency=0, is_input_rgb=True)
-      cv2.imshow('1', vis[...,::-1])
-      cv2.waitKey(1)
+      if debug>=1:
+        center_pose = pose@np.linalg.inv(to_origin)
+        vis = draw_posed_3d_box(reader.K, img=color, ob_in_cam=center_pose, bbox=bbox)
+        vis = draw_xyz_axis(color, ob_in_cam=center_pose, scale=0.1, K=reader.K, thickness=3, transparency=0, is_input_rgb=True)
+        cv2.imshow('1', vis[...,::-1])
+        cv2.waitKey(1)
 
 
-    if debug>=2:
-      os.makedirs(f'{debug_dir}/track_vis', exist_ok=True)
-      imageio.imwrite(f'{debug_dir}/track_vis/{reader.id_strs[i]}.png', vis)
+      if debug>=2:
+        os.makedirs(f'{debug_dir}/track_vis', exist_ok=True)
+        imageio.imwrite(f'{debug_dir}/track_vis/{reader.id_strs[i]}.png', vis)
+    
+    # Next line is used for profiling
+    (Stats(profile).strip_dirs().sort_stats(SortKey.CUMULATIVE).print_stats())
 
