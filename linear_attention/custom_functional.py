@@ -819,6 +819,7 @@ def multi_head_attention_forward(
         # < Linear version
         q_scaled = softmax(k, dim=-1)
         k_scaled = softmax(k, dim=-1)
+        # k_scaled = k * math.sqrt(1.0 / float(E))
         # >
         # print(f"Q, K, V shapes: {q.shape, k.shape, v.shape}")
 
