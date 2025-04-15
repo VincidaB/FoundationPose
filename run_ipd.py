@@ -24,7 +24,7 @@ if __name__=='__main__':
   parser.add_argument('--profile', type=bool, default=False)
   args = parser.parse_args()
 
-  set_logging_format()
+  set_logging_format(level=logging.ERROR)
   set_seed(0)
 
   mesh = trimesh.load(args.mesh_file)
@@ -42,12 +42,12 @@ if __name__=='__main__':
   refiner = PoseRefinePredictor()
   glctx = dr.RasterizeCudaContext()
   est = FoundationPose(model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh, scorer=scorer, refiner=refiner, debug_dir=debug_dir, debug=debug, glctx=glctx)
-  #logging.info("estimator initialization done")
+  # logging.info("estimator initialization done")
 
   reader = YcbineoatReader(video_dir=args.test_scene_dir, shorter_side=None, zfar=np.inf)
 
   for i in range(len(reader.color_files)):
-    logging.info(f'i:{i}')
+    # logging.info(f'i:{i}')
     color = reader.get_color(i)
     depth = reader.get_depth(i)
     # scale depth by a factor of 0.1
@@ -56,16 +56,18 @@ if __name__=='__main__':
       mask = reader.get_mask(0).astype(bool)
       start_time = time()
       pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
-      logging.info(f'\033[93mregister time: {time()-start_time:.2f}\033[0m')
+      logging.getLogger().setLevel(logging.INFO)
+      logging.info(f'\033[93mregister time first run: {time()-start_time:.2f}\033[0m')
+      logging.getLogger().setLevel(logging.ERROR)
 
 
       gt_rotation = np.array([-0.07963122209137952, -0.0751164820287667, -0.9939901322154824, 0.9916181604683285, 0.09581080499935263, -0.08668168189401496, 0.10174621806543538, -0.9925612348360231, 0.06685733667636427]).reshape(3,3)
       gt_pose_t =np.array([-100.31353924053144, 55.82813669281825, 1702.1111610000928]) /1000
-      logging.info(f'gt_pose_t: {gt_pose_t}')
+      # logging.info(f'gt_pose_t: {gt_pose_t}')
 
       # calculate the error in position
       estimated_position = pose[:3,3]
-      logging.info(f'Estimated position: {estimated_position}')
+      # logging.info(f'Estimated position: {estimated_position}')
       gt_position = gt_pose_t
       error = np.linalg.norm(estimated_position - gt_position)
 
@@ -113,6 +115,7 @@ if __name__=='__main__':
         print(processed_output)
       logging.getLogger().setLevel(logging.INFO)
       logging.info(f'\033[93mregister time second run: {time()-start_time:.2f}\033[0m')
+      logging.getLogger().setLevel(logging.ERROR)
 
       # third run for performance evaluation
       start_time = time()
@@ -121,6 +124,7 @@ if __name__=='__main__':
       pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
       logging.getLogger().setLevel(logging.INFO)
       logging.info(f'\033[93mregister time third run: {time()-start_time:.2f}\033[0m')
+      logging.getLogger().setLevel(logging.ERROR)
 
       if debug>=3:
         m = mesh.copy()
