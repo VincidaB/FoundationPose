@@ -17,16 +17,17 @@ from time import time
 
 
 class FoundationPose:
-  def __init__(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, scorer:ScorePredictor=None, refiner:PoseRefinePredictor=None, glctx=None, debug=0, debug_dir='/home/bowen/debug/novel_pose_debug/'):
+  def __init__(self, model_pts=None, model_normals=None, symmetry_tfs=None, mesh=None, model_id=None, scorer:ScorePredictor=None, refiner:PoseRefinePredictor=None, glctx=None, debug=0, debug_dir='/media/vincent/more/bpc_teamname/bpc/debug'):
     self.gt_pose = None
     self.ignore_normal_flip = True
     self.debug = debug
     self.debug_dir = debug_dir
     os.makedirs(debug_dir, exist_ok=True)
 
-    self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh)
-    self.make_rotation_grid(min_n_views=40, inplane_step=60)
-    #self.make_rotation_grid(min_n_views=40, inplane_step=110)
+
+    if model_pts is not None and model_normals is not None:
+      self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh, model_id=model_id)
+      self.make_rotation_grid(min_n_views=40, inplane_step=60)
 
     self.glctx = glctx
 
@@ -42,8 +43,16 @@ class FoundationPose:
 
     self.pose_last = None   # Used for tracking; per the centered mesh
 
+    self.model_id_diameters = {}
 
-  def reset_object(self, model_pts, model_normals, symmetry_tfs=None, mesh=None):
+  def set_model(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, model_id=None):
+    if model_pts is not None and model_normals is not None:
+      logging.info(f"reset_object")
+      self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh, model_id=model_id)
+      logging.info(f"make_rotation_grid")
+      self.make_rotation_grid(min_n_views=40, inplane_step=60)
+
+  def reset_object(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, model_id=None):
     max_xyz = mesh.vertices.max(axis=0)
     min_xyz = mesh.vertices.min(axis=0)
     self.model_center = (min_xyz+max_xyz)/2
@@ -53,7 +62,19 @@ class FoundationPose:
       mesh.vertices = mesh.vertices - self.model_center.reshape(1,3)
 
     model_pts = mesh.vertices
-    self.diameter = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
+    
+    logging.info(f'computing mesh diameter')
+    # this is taking way to long, we need to cache the diameters
+    if model_id is None:
+      self.diameter = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
+    else:
+      if model_id in self.model_id_diameters:
+        self.diameter = self.model_id_diameters[model_id]
+      else:
+        self.diameter = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
+        self.model_id_diameters[model_id] = self.diameter
+    
+    
     self.vox_size = max(self.diameter/20.0, 0.003)
     logging.info(f'self.diameter:{self.diameter}, vox_size:{self.vox_size}')
     self.dist_bin = self.vox_size/2
@@ -155,7 +176,7 @@ class FoundationPose:
     if self.debug>=2:
       pcd = toOpen3dCloud(center.reshape(1,3))
       o3d.io.write_point_cloud(f'{self.debug_dir}/init_center.ply', pcd)
-
+    logging.info(f'guess_translation: {center.reshape(3)}')
     return center.reshape(3)
 
 
