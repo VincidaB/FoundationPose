@@ -79,9 +79,10 @@ class FoundationPose:
 
 
 
-  def get_tf_to_centered_mesh(self):
-    tf_to_center = torch.eye(4, dtype=torch.float, device='cuda')
-    tf_to_center[:3,3] = -torch.as_tensor(self.model_center, device='cuda', dtype=torch.float)
+  def get_tf_to_centered_mesh(self, precision=None):
+    tf_precision = get_tf_precision(precision)
+    tf_to_center = torch.eye(4, dtype=tf_precision, device='cuda')
+    tf_to_center[:3,3] = -torch.as_tensor(self.model_center, device='cuda', dtype=tf_precision)
     return tf_to_center
 
 
@@ -134,7 +135,9 @@ class FoundationPose:
     return ob_in_cams
 
 
-  def guess_translation(self, depth, mask, K):
+  def guess_translation(self, depth, mask, K, precision=None):
+    np_precision = get_np_precision(precision)
+    # print("="*30+f" K IS OF DTYPE: {type(K)} ")
     vs,us = np.where(mask>0)
     if len(us)==0:
       logging.info(f'mask is all zero')
@@ -147,7 +150,11 @@ class FoundationPose:
       return np.zeros((3))
 
     zc = np.median(depth[valid])
-    center = (np.linalg.inv(K)@np.asarray([uc,vc,1]).reshape(3,1))*zc
+    if precision is None or precision < 32:
+      K_copy = K.astype(dtype=np.float32)
+    else:
+      K_copy = K
+    center = (np.linalg.inv(K_copy)@np.asarray([uc,vc,1]).reshape(3,1))*zc
 
     if self.debug>=2:
       pcd = toOpen3dCloud(center.reshape(1,3))
@@ -156,12 +163,14 @@ class FoundationPose:
     return center.reshape(3)
 
 
-  def register(self, K, rgb, depth, ob_mask, ob_id=None, glctx=None, iteration=5):
+  def register(self, K, rgb, depth, ob_mask, ob_id=None, glctx=None, iteration=5, precision=None):
     '''Copmute pose from given pts to self.pcd
     @pts: (N,3) np array, downsampled scene points
     '''
     set_seed(0)
     logging.info('Welcome')
+    
+    np_precision = get_np_precision(precision)
 
     if self.glctx is None:
       if glctx is None:
@@ -170,11 +179,12 @@ class FoundationPose:
       else:
         self.glctx = glctx
 
-    depth = erode_depth(depth, radius=2, device='cuda')
-    depth = bilateral_filter_depth(depth, radius=2, device='cuda')
+    depth = erode_depth(depth, radius=2, device='cuda', precision=precision)
+    depth = bilateral_filter_depth(depth, radius=2, device='cuda', precision=precision)
+    # logging.info("="*30+f" DEPTH DTYPE: {depth.dtype}")
 
     if self.debug>=2:
-      xyz_map = depth2xyzmap(depth, K)
+      xyz_map = depth2xyzmap(depth, K, precision=precision)
       valid = xyz_map[...,2]>=0.001
       pcd = toOpen3dCloud(xyz_map[valid], rgb[valid])
       o3d.io.write_point_cloud(f'{self.debug_dir}/scene_raw.ply',pcd)
@@ -196,12 +206,14 @@ class FoundationPose:
       o3d.io.write_point_cloud(f'{self.debug_dir}/scene_complete.ply',pcd)
 
     self.H, self.W = depth.shape[:2]
+    K = K.astype(dtype=np_precision, copy=False)
     self.K = K
     self.ob_id = ob_id
     self.ob_mask = ob_mask
 
     poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None)
     poses = poses.data.cpu().numpy()
+    # logging.info("="*30+f" poses dtype: {poses.dtype}")
     logging.info(f'poses:{poses.shape}')
     center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
 
@@ -212,11 +224,13 @@ class FoundationPose:
     logging.info(f"after viewpoint, add_errs min:{add_errs.min()}")
 
     xyz_map = depth2xyzmap(depth, K)
-    poses, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, xyz_map=xyz_map, glctx=self.glctx, mesh_diameter=self.diameter, iteration=iteration, get_vis=self.debug>=2)
+    # TODO: something is using float64 in here, and it shouldn't. Find out why.
+    # TODO: set precision to 16, and track where linalg cannot process them to use float32 only there
+    poses, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, xyz_map=xyz_map, glctx=self.glctx, mesh_diameter=self.diameter, iteration=iteration, get_vis=self.debug>=2, precision=precision)
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_refiner.png', vis)
 
-    scores, vis = self.scorer.predict(mesh=self.mesh, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, mesh_tensors=self.mesh_tensors, glctx=self.glctx, mesh_diameter=self.diameter, get_vis=self.debug>=2)
+    scores, vis = self.scorer.predict(mesh=self.mesh, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, mesh_tensors=self.mesh_tensors, glctx=self.glctx, mesh_diameter=self.diameter, get_vis=self.debug>=2, precision=precision)
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_score.png', vis)
 
@@ -230,7 +244,7 @@ class FoundationPose:
 
     logging.info(f'sorted scores:{scores}')
 
-    best_pose = poses[0]@self.get_tf_to_centered_mesh()
+    best_pose = poses[0]@self.get_tf_to_centered_mesh(precision)
     self.pose_last = poses[0]
     self.best_id = ids[0]
 

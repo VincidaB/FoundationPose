@@ -22,10 +22,23 @@ if __name__=='__main__':
   parser.add_argument('--debug', type=int, default=1)
   parser.add_argument('--debug_dir', type=str, default=f'{code_dir}/debug')
   parser.add_argument('--profile', type=bool, default=False)
+  parser.add_argument('--precision', type=int, default=None)
   args = parser.parse_args()
 
-  set_logging_format(level=logging.ERROR)
+  set_logging_format(level=logging.INFO)
   set_seed(0)
+
+  if args.precision == 32:
+    tf_precision = torch.float32
+    np_precision = np.float32
+  elif args.precision == 16:
+    tf_precision = torch.float16
+    np_precision = np.float16
+  elif args.precision == 64:
+    tf_precision = torch.float64
+    np_precision = np.float64
+  else:
+    raise ValueError(f"Precision must be 64, 32 or 16 (default: 32). Your value: {args.precision}.")
 
   mesh = trimesh.load(args.mesh_file)
   # scale mesh to m from mm
@@ -51,12 +64,12 @@ if __name__=='__main__':
     color = reader.get_color(i)
     depth = reader.get_depth(i)
     # scale depth by a factor of 0.1
-    depth = depth*0.1
+    depth = (depth*0.1).astype(np_precision)
     if i==0:
       mask = reader.get_mask(0).astype(bool)
       start_time = time()
-      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
       logging.getLogger().setLevel(logging.INFO)
+      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter, precision=args.precision)
       logging.info(f'\033[93mregister time first run: {time()-start_time:.2f}\033[0m')
       logging.getLogger().setLevel(logging.ERROR)
 
@@ -88,7 +101,7 @@ if __name__=='__main__':
       # second run for performance evaluation
       start_time = time()
       #disable logging for second run
-      logging.getLogger().setLevel(logging.ERROR)
+      logging.getLogger().setLevel(logging.INFO)
       
       profile = args.profile
       if profile:
@@ -97,7 +110,7 @@ if __name__=='__main__':
         import io
         profiler = Profile()
         profiler.enable()  # this line can be wherever we want to start collecting data
-      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
+      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter, precision=args.precision)
       if profile:
         profiler.disable()  # this line can be wherever we want to stop collecting data
         p_stream = io.StringIO()
@@ -121,7 +134,7 @@ if __name__=='__main__':
       start_time = time()
       #disable logging for third run
       logging.getLogger().setLevel(logging.ERROR)
-      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter)
+      pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter, precision=args.precision)
       logging.getLogger().setLevel(logging.INFO)
       logging.info(f'\033[93mregister time third run: {time()-start_time:.2f}\033[0m')
       logging.getLogger().setLevel(logging.ERROR)

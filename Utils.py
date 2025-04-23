@@ -65,11 +65,6 @@ to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 BAD_DEPTH = 99
 BAD_COLOR = 0
 
-glcam_in_cvcam = np.array([[1,0,0,0],
-                          [0,-1,0,0],
-                          [0,0,-1,0],
-                          [0,0,0,1]]).astype(float)
-
 COLOR_MAP=np.array([[0, 0, 0], #Ignore
                     [128,0,0], #Background
                     [0,128,0], #Wall
@@ -130,7 +125,7 @@ def make_mesh_tensors(mesh, device='cuda', max_tex_size=None):
   return mesh_tensors
 
 
-def nvdiffrast_render(K=None, H=None, W=None, ob_in_cams=None, glctx=None, context='cuda', get_normal=False, mesh_tensors=None, mesh=None, projection_mat=None, bbox2d=None, output_size=None, use_light=False, light_color=None, light_dir=np.array([0,0,1]), light_pos=np.array([0,0,0]), w_ambient=0.8, w_diffuse=0.5, extra={}):
+def nvdiffrast_render(K=None, H=None, W=None, ob_in_cams=None, glctx=None, context='cuda', get_normal=False, mesh_tensors=None, mesh=None, projection_mat=None, bbox2d=None, output_size=None, use_light=False, light_color=None, light_dir=np.array([0,0,1]), light_pos=np.array([0,0,0]), w_ambient=0.8, w_diffuse=0.5, extra={}, precision=None):
   '''Just plain rendering, not support any gradient
   @K: (3,3) np array
   @ob_in_cams: (N,4,4) torch tensor, openCV camera
@@ -149,36 +144,47 @@ def nvdiffrast_render(K=None, H=None, W=None, ob_in_cams=None, glctx=None, conte
       raise NotImplementedError
     logging.info("created context")
 
+  tf_precision = get_tf_precision(precision)
+  np_precision = get_np_precision(precision)
+
   if mesh_tensors is None:
     mesh_tensors = make_mesh_tensors(mesh)
-  pos = mesh_tensors['pos']
-  vnormals = mesh_tensors['vnormals']
+  pos = mesh_tensors['pos'].to(dtype=tf_precision)
+  vnormals = mesh_tensors['vnormals'].to(dtype=tf_precision)
   pos_idx = mesh_tensors['faces']
   has_tex = 'tex' in mesh_tensors
 
-  ob_in_glcams = torch.tensor(glcam_in_cvcam, device='cuda', dtype=torch.float)[None]@ob_in_cams
+
+  glcam_in_cvcam = np.array([[1,0,0,0],
+                            [0,-1,0,0],
+                            [0,0,-1,0],
+                            [0,0,0,1]]).astype(np_precision)
+# logging.info("="*30+f" ob_in_cams inner: {ob_in_cams.dtype}, np / tf precisions: {np_precision, tf_precision}")
+  ob_in_glcams = torch.tensor(glcam_in_cvcam, device='cuda', dtype=tf_precision)[None]@ob_in_cams
   if projection_mat is None:
     projection_mat = projection_matrix_from_intrinsics(K, height=H, width=W, znear=0.001, zfar=100)
-  projection_mat = torch.as_tensor(projection_mat.reshape(-1,4,4), device='cuda', dtype=torch.float)
-  mtx = projection_mat@ob_in_glcams
+  projection_mat = torch.as_tensor(projection_mat.reshape(-1,4,4), device='cuda', dtype=tf_precision)
+  mtx = (projection_mat@ob_in_glcams)
 
   if output_size is None:
     output_size = np.asarray([H,W])
 
-  pts_cam = transform_pts(pos, ob_in_cams)
-  pos_homo = to_homo_torch(pos)
+# logging.info("="*30+f" pos.dtype : {pos.dtype}")
+  pts_cam = transform_pts(pos, ob_in_cams).to(dtype=torch.float32)  # interpolate only accepts float32 arguments
+  pos_homo = to_homo_torch(pos).to(dtype=tf_precision)
+# logging.info("="*30+f"mtx: {mtx.dtype}, pos_homo: {pos_homo.dtype}")
   pos_clip = (mtx[:,None]@pos_homo[None,...,None])[...,0]
   if bbox2d is not None:
     l = bbox2d[:,0]
     t = H-bbox2d[:,1]
     r = bbox2d[:,2]
     b = H-bbox2d[:,3]
-    tf = torch.eye(4, dtype=torch.float, device='cuda').reshape(1,4,4).expand(len(ob_in_cams),4,4).contiguous()
+    tf = torch.eye(4, dtype=tf_precision, device='cuda').reshape(1,4,4).expand(len(ob_in_cams),4,4).contiguous()
     tf[:,0,0] = W/(r-l)
     tf[:,1,1] = H/(t-b)
     tf[:,3,0] = (W-r-l)/(r-l)
     tf[:,3,1] = (H-t-b)/(t-b)
-    pos_clip = pos_clip@tf
+    pos_clip = (pos_clip@tf).to(dtype=torch.float32)  # rasterize only accepts float32 arguments
   rast_out, _ = dr.rasterize(glctx, pos_clip, pos_idx, resolution=np.asarray(output_size))
   xyz_map, _ = dr.interpolate(pts_cam, rast_out, pos_idx)
   depth = xyz_map[...,2]
@@ -191,7 +197,7 @@ def nvdiffrast_render(K=None, H=None, W=None, ob_in_cams=None, glctx=None, conte
   if use_light:
     get_normal = True
   if get_normal:
-    vnormals_cam = transform_dirs(vnormals, ob_in_cams)
+    vnormals_cam = transform_dirs(vnormals, ob_in_cams).to(dtype=torch.float32)  # interpolate only accepts float32 arguments
     normal_map, _ = dr.interpolate(vnormals_cam, rast_out, pos_idx)
     normal_map = F.normalize(normal_map, dim=-1)
     normal_map = torch.flip(normal_map, dims=[1])
@@ -200,15 +206,16 @@ def nvdiffrast_render(K=None, H=None, W=None, ob_in_cams=None, glctx=None, conte
 
   if use_light:
     if light_dir is not None:
-      light_dir_neg = -torch.as_tensor(light_dir, dtype=torch.float, device='cuda')
+      light_dir_neg = -torch.as_tensor(light_dir, dtype=torch.float32, device='cuda')
     else:
-      light_dir_neg = torch.as_tensor(light_pos, dtype=torch.float, device='cuda').reshape(1,1,3) - pts_cam
+      light_dir_neg = torch.as_tensor(light_pos, dtype=torch.float32, device='cuda').reshape(1,1,3) - pts_cam  # interpolate only accepts float32 arguments
     diffuse_intensity = (F.normalize(vnormals_cam, dim=-1) * F.normalize(light_dir_neg, dim=-1)).sum(dim=-1).clip(0, 1)[...,None]
+  # logging.info("="*30+f" tf_precision : {tf_precision}, diffuse_intensity.dtype : {diffuse_intensity.dtype}, rast_out.dtype : {rast_out.dtype}, pos_idx.dtype : {pos_idx.dtype}")
     diffuse_intensity_map, _ = dr.interpolate(diffuse_intensity, rast_out, pos_idx)  # (N_pose, H, W, 1)
     if light_color is None:
       light_color = color
     else:
-      light_color = torch.as_tensor(light_color, device='cuda', dtype=torch.float)
+      light_color = torch.as_tensor(light_color, device='cuda', dtype=tf_precision)
     color = color*w_ambient + diffuse_intensity_map*light_color*w_diffuse
 
   color = color.clip(0,1)
@@ -342,14 +349,16 @@ if wp is not None:
     if sum_weight>0 and num_valid>0:
       out[h,w] = sum/sum_weight
 
-  def bilateral_filter_depth(depth, radius=2, zfar=100, sigmaD=2, sigmaR=100000, device='cuda'):
+  def bilateral_filter_depth(depth, radius=2, zfar=100, sigmaD=2, sigmaR=100000, device='cuda', precision=None):
+    tf_precision = get_tf_precision(precision)
+    np_precision = get_np_precision(precision)
     if isinstance(depth, np.ndarray):
       depth_wp = wp.array(depth, dtype=float, device=device)
     else:
-      depth_wp = wp.from_torch(depth)
+      depth_wp = wp.from_torch(depth, dtype=float)
     out_wp = wp.zeros(depth.shape, dtype=float, device=device)
     wp.launch(kernel=bilateral_filter_depth_kernel, device=device, dim=[depth.shape[0], depth.shape[1]], inputs=[depth_wp, out_wp, radius, zfar, sigmaD, sigmaR])
-    depth_out = wp.to_torch(out_wp)
+    depth_out = wp.to_torch(out_wp).to(dtype=tf_precision)
 
     if isinstance(depth, np.ndarray):
       depth_out = depth_out.data.cpu().numpy()
@@ -384,11 +393,12 @@ if wp is not None:
       out[h,w] = d_ori
 
 
-  def erode_depth(depth, radius=2, depth_diff_thres=0.001, ratio_thres=0.8, zfar=100, device='cuda'):
-    depth_wp = wp.from_torch(torch.as_tensor(depth, dtype=torch.float, device=device))
-    out_wp = wp.zeros(depth.shape, dtype=float, device=device)
+  def erode_depth(depth, radius=2, depth_diff_thres=0.001, ratio_thres=0.8, zfar=100, device='cuda', precision=None):
+    tf_precision = get_tf_precision(precision)
+    depth_wp = wp.from_torch(torch.as_tensor(depth, dtype=torch.float32, device=device))  # kernel does not allow any other precision
+    out_wp = wp.zeros(depth.shape, dtype=wp.float32, device=device)
     wp.launch(kernel=erode_depth_kernel, device=device, dim=[depth.shape[0], depth.shape[1]], inputs=[depth_wp, out_wp, radius, depth_diff_thres, ratio_thres, zfar],)
-    depth_out = wp.to_torch(out_wp)
+    depth_out = wp.to_torch(out_wp).to(dtype=tf_precision)
 
     if isinstance(depth, np.ndarray):
       depth_out = depth_out.data.cpu().numpy()
@@ -396,7 +406,8 @@ if wp is not None:
 
 
 
-def depth2xyzmap(depth, K, uvs=None):
+def depth2xyzmap(depth, K, uvs=None, precision=None):
+  np_precision = get_np_precision(precision)
   invalid_mask = (depth<0.001)
   H,W = depth.shape[:2]
   if uvs is None:
@@ -411,7 +422,7 @@ def depth2xyzmap(depth, K, uvs=None):
   xs = (us-K[0,2])*zs/K[0,0]
   ys = (vs-K[1,2])*zs/K[1,1]
   pts = np.stack((xs.reshape(-1),ys.reshape(-1),zs.reshape(-1)), 1)  #(N,3)
-  xyz_map = np.zeros((H,W,3), dtype=np.float32)
+  xyz_map = np.zeros((H,W,3), dtype=np_precision)
   xyz_map[vs,us] = pts
   xyz_map[invalid_mask] = 0
   return xyz_map
@@ -519,7 +530,7 @@ def to_homo(pts):
 
 def to_homo_torch(pts):
   '''
-  @pts: shape can be (...,N,3 or 2) or (N,3) will homogeneliaze the last dimension
+  @pts: shape can be (...,N,3 or 2) or (N,3) will homogenize the last dimension
   '''
   ones = torch.ones((*pts.shape[:-1],1), dtype=torch.float, device=pts.device)
   homo = torch.cat((pts, ones),dim=-1)
@@ -574,7 +585,7 @@ def compute_mesh_diameter(model_pts=None, mesh=None, n_sample=1000):
   return diameter
 
 
-def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, crop_ratio=1.2, out_size=None, rgb=None, uvs=None, method='min_box', mesh_diameter=None):
+def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, crop_ratio=1.2, out_size=None, rgb=None, uvs=None, method='min_box', mesh_diameter=None, precision=None):
   '''Project the points and find the cropping transform
   @pts: (N,3)
   @poses: (B,4,4) tensor
@@ -597,28 +608,41 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
     tf = new_tf@tf
     return tf
 
+  tf_precision = get_tf_precision(precision)
+  if tf_precision is None:  # TODO: make torch.float32 the default value
+    logging.warning("="*30+" tf_precision is still None "+"="*20)
+    tf_precision = torch.float32
+  # logging.info("="*30+f" tf_precision set to {tf_precision}")
+
   B = len(poses)
-  torch.set_default_tensor_type('torch.cuda.FloatTensor')
+  # This is a highly malicious way to set it, use with extreme caution
+  # torch.set_default_tensor_type('torch.cuda.FloatTensor')
   if method=='box_3d':
     radius = mesh_diameter*crop_ratio/2
     offsets = torch.tensor([0,0,0,
                         radius,0,0,
                         -radius,0,0,
                         0,radius,0,
-                        0,-radius,0]).reshape(-1,3)
+                        0,-radius,0],
+                        dtype=tf_precision,
+                        device=poses.device).reshape(-1,3)
     pts = poses[:,:3,3].reshape(-1,1,3)+offsets.reshape(1,-1,3)
-    K = torch.as_tensor(K)
+    # logging.info("="*30+f" DEVICES: {poses.device, offsets.device, pts.device}")
+    pts = pts.to(dtype=tf_precision)
+    K = torch.as_tensor(K, dtype=tf_precision, device=poses.device)
+    # logging.info("="*30+f" TYPE OF K: {K.dtype}, TYPE OF pts: {pts.dtype}")
     projected = (K@pts.reshape(-1,3).T).T
     uvs = projected[:,:2]/projected[:,2:3]
     uvs = uvs.reshape(B, -1, 2)
     center = uvs[:,0]  #(B,2)
     radius = torch.abs(uvs-center.reshape(-1,1,2)).reshape(B,-1).max(axis=-1)[0].reshape(-1)  #(B)
+    # logging.info("="*30+f" radius: {radius.dtype, radius.shape}")
     left = center[:,0]-radius
     right = center[:,0]+radius
     top = center[:,1]-radius
     bottom = center[:,1]+radius
     tfs = compute_tf_batch(left, right, top, bottom)
-    return tfs
+    return tfs.to(device=poses.device, dtype=tf_precision)
 
   else:
     raise RuntimeError
@@ -845,11 +869,13 @@ def pose_to_egocentric_delta_pose(A_in_cam, B_in_cam):
 
 
 
-def egocentric_delta_pose_to_pose(A_in_cam, trans_delta, rot_mat_delta):
+def egocentric_delta_pose_to_pose(A_in_cam, trans_delta, rot_mat_delta, precision=None):
   '''Used for Pose Refinement. Given the object's two poses in camera, convert them to relative poses in camera's egocentric view
   @A_in_cam: (B,4,4) torch tensor
   '''
-  B_in_cam = torch.eye(4, dtype=torch.float, device=A_in_cam.device)[None].expand(len(A_in_cam),-1,-1).contiguous()
+  tf_precision = get_tf_precision(precision)
+
+  B_in_cam = torch.eye(4, dtype=tf_precision, device=A_in_cam.device)[None].expand(len(A_in_cam),-1,-1).contiguous()
   B_in_cam[:,:3,3] = A_in_cam[:,:3,3]+trans_delta
   B_in_cam[:,:3,:3] = rot_mat_delta@A_in_cam[:,:3,:3]
   return B_in_cam
@@ -1018,3 +1044,41 @@ def make_yaml_dumpable(D):
         D[d][i] = make_yaml_dumpable(D[d][i])
       continue
   return dict(D)
+
+def get_tf_precision(precision=None):
+  """
+  Return relevant torch precision.
+
+  Arg:
+    precision (int):
+      Expected precision to use. Accepted values: 16, 32, 64, None.
+      Other values are treated as None.
+      Defaults to None, which leads to a float32 precision.
+  """
+  # TODO: Change None to torch.float32. The current return "None" helps finding bugs,
+  # as torch.tensor(dtype=None) with floats defaults to torch.float64, but most of the code
+  # is defined as torch.float, which is torch.float32
+  # TODO: CTRL-F 'torch.float32' because I wanted to let default as None as long as possible
+  precision_map = {
+      16: torch.float16,
+      32: torch.float32,
+      64: torch.float64
+  }
+  return precision_map.get(precision, torch.float32)
+
+def get_np_precision(precision=None):
+  """
+  Return relevant numpy precision.
+
+  Arg:
+    precision (int):
+      Expected precision to use. Accepted values: 16, 32, 64, None.
+      Other values are treated as None.
+      Defaults to None, which leads to a float32 precision.
+  """
+  precision_map = {
+      16: np.float16,
+      32: np.float32,
+      64: np.float64
+  }
+  return precision_map.get(precision, np.float32)
