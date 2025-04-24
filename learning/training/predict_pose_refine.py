@@ -152,6 +152,7 @@ class PoseRefinePredictor:
     @rgb: np array (H,W,3)
     @ob_in_cams: np array (N,4,4)
     '''
+    start_predict_refine = time.time()
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
     logging.info(f'ob_in_cams:{ob_in_cams.shape}')
     tf_to_center = np.eye(4)
@@ -179,16 +180,24 @@ class PoseRefinePredictor:
     if not isinstance(trans_normalizer, float):
       trans_normalizer = torch.as_tensor(list(trans_normalizer), device='cuda', dtype=torch.float).reshape(1,3)
 
+    logging.info(f'predict_refine predict time : {time.time() - start_predict_refine}')
+
     for _ in range(iteration):
+      iteration_start = time.time()
       logging.info("making cropped data")
+
+      # most of the time is spent here it seems (except for the weird fuck that is happening at iteration 2)
       pose_data = make_crop_data_batch(self.cfg.input_resize, B_in_cams, mesh_centered, rgb_tensor, depth_tensor, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter)
+      logging.info(f'make_crop_data_batch time : {time.time() - iteration_start}')
       B_in_cams = []
       for b in range(0, pose_data.rgbAs.shape[0], bs):
         A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).float()
         B = torch.cat([pose_data.rgbBs[b:b+bs].cuda(), pose_data.xyz_mapBs[b:b+bs].cuda()], dim=1).float()
         logging.info("forward start")
         with torch.cuda.amp.autocast(enabled=self.amp):
-          output = self.model(A,B)
+          model_start_time = time.time()
+          output = self.model(A,B) #the initial loading of the model is slow, at around 0.5 seconds
+          logging.info(f'\033[93mmodel time: {time.time()-model_start_time:.4f}\033[0m')
         for k in output:
           output[k] = output[k].float()
         logging.info("forward done")
@@ -232,6 +241,8 @@ class PoseRefinePredictor:
         B_in_cams.append(B_in_cam)
 
       B_in_cams = torch.cat(B_in_cams, dim=0).reshape(len(ob_in_cams),4,4)
+
+      logging.info(f'\033[95miteration time: {time.time()-iteration_start:.2f}\033[0m')
 
     B_in_cams_out = B_in_cams@torch.tensor(tf_to_center[None], device='cuda', dtype=torch.float)
     torch.cuda.empty_cache()
