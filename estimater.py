@@ -13,18 +13,21 @@ import itertools
 from learning.training.predict_score import *
 from learning.training.predict_pose_refine import *
 import yaml
+from time import time
 
 
 class FoundationPose:
-  def __init__(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, scorer:ScorePredictor=None, refiner:PoseRefinePredictor=None, glctx=None, debug=0, debug_dir='/home/bowen/debug/novel_pose_debug/'):
+  def __init__(self, model_pts=None, model_normals=None, symmetry_tfs=None, mesh=None, model_id=None, scorer:ScorePredictor=None, refiner:PoseRefinePredictor=None, glctx=None, debug=0, debug_dir='/media/vincent/more/bpc_teamname/bpc/debug'):
     self.gt_pose = None
     self.ignore_normal_flip = True
     self.debug = debug
     self.debug_dir = debug_dir
     os.makedirs(debug_dir, exist_ok=True)
 
-    self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh)
-    self.make_rotation_grid(min_n_views=40, inplane_step=60)
+
+    if model_pts is not None and model_normals is not None:
+      self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh, model_id=model_id)
+      self.make_rotation_grid(min_n_views=40, inplane_step=60)
 
     self.glctx = glctx
 
@@ -40,8 +43,16 @@ class FoundationPose:
 
     self.pose_last = None   # Used for tracking; per the centered mesh
 
+    self.model_id_diameters = {}
 
-  def reset_object(self, model_pts, model_normals, symmetry_tfs=None, mesh=None):
+  def set_model(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, model_id=None):
+    if model_pts is not None and model_normals is not None:
+      logging.info(f"reset_object")
+      self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh, model_id=model_id)
+      logging.info(f"make_rotation_grid")
+      self.make_rotation_grid(min_n_views=40, inplane_step=60)
+
+  def reset_object(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, model_id=None):
     max_xyz = mesh.vertices.max(axis=0)
     min_xyz = mesh.vertices.min(axis=0)
     self.model_center = (min_xyz+max_xyz)/2
@@ -51,7 +62,19 @@ class FoundationPose:
       mesh.vertices = mesh.vertices - self.model_center.reshape(1,3)
 
     model_pts = mesh.vertices
-    self.diameter = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
+    
+    logging.info(f'computing mesh diameter')
+    # this is taking way to long, we need to cache the diameters
+    if model_id is None:
+      self.diameter = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
+    else:
+      if model_id in self.model_id_diameters:
+        self.diameter = self.model_id_diameters[model_id]
+      else:
+        self.diameter = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
+        self.model_id_diameters[model_id] = self.diameter
+    
+    
     self.vox_size = max(self.diameter/20.0, 0.003)
     logging.info(f'self.diameter:{self.diameter}, vox_size:{self.vox_size}')
     self.dist_bin = self.vox_size/2
@@ -105,8 +128,9 @@ class FoundationPose:
 
 
   def make_rotation_grid(self, min_n_views=40, inplane_step=60):
+    start_time = time()
     cam_in_obs = sample_views_icosphere(n_views=min_n_views)
-    logging.info(f'cam_in_obs:{cam_in_obs.shape}')
+    logging.info(f'mcam_in_obs:{cam_in_obs.shape}')
     rot_grid = []
     for i in range(len(cam_in_obs)):
       for inplane_rot in np.deg2rad(np.arange(0, 360, inplane_step)):
@@ -123,7 +147,7 @@ class FoundationPose:
     logging.info(f"after cluster, rot_grid:{rot_grid.shape}")
     self.rot_grid = torch.as_tensor(rot_grid, device='cuda', dtype=torch.float)
     logging.info(f"self.rot_grid: {self.rot_grid.shape}")
-
+    logging.info(f"\033[92mmake_rotation_grid time: {time()-start_time:.4f}\033[0m")
 
   def generate_random_pose_hypo(self, K, rgb, depth, mask, scene_pts=None):
     '''
@@ -159,7 +183,7 @@ class FoundationPose:
     if self.debug>=2:
       pcd = toOpen3dCloud(center.reshape(1,3))
       o3d.io.write_point_cloud(f'{self.debug_dir}/init_center.ply', pcd)
-
+    logging.info(f'guess_translation: {center.reshape(3)}')
     return center.reshape(3)
 
 
@@ -175,7 +199,7 @@ class FoundationPose:
     if self.glctx is None:
       if glctx is None:
         self.glctx = dr.RasterizeCudaContext()
-        # self.glctx = dr.RasterizeGLContext()
+        #self.glctx = dr.RasterizeGLContext()
       else:
         self.glctx = glctx
 
@@ -211,28 +235,41 @@ class FoundationPose:
     self.ob_id = ob_id
     self.ob_mask = ob_mask
 
+    start_time_poses = time()
     poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None)
     poses = poses.data.cpu().numpy()
     # logging.info("="*30+f" poses dtype: {poses.dtype}")
     logging.info(f'poses:{poses.shape}')
+    logging.info(f"\033[92mgenerate_random_pose_hypo time: {time()-start_time_poses:.4f}\033[0m")
+
+
+    start_time_guess_translation = time()
     center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
+    logging.info(f"\033[92mguess_translation time: {time()-start_time_guess_translation:.4f}\033[0m")
+
 
     poses = torch.as_tensor(poses, device='cuda', dtype=torch.float)
     poses[:,:3,3] = torch.as_tensor(center.reshape(1,3), device='cuda')
 
+    start_add_errs = time()
     add_errs = self.compute_add_err_to_gt_pose(poses)
     logging.info(f"after viewpoint, add_errs min:{add_errs.min()}")
+    logging.info(f"\033[92mcompute_add_err_to_gt_pose time: {time()-start_add_errs:.4f}\033[0m")
 
     xyz_map = depth2xyzmap(depth, K)
-    # TODO: something is using float64 in here, and it shouldn't. Find out why.
-    # TODO: set precision to 16, and track where linalg cannot process them to use float32 only there
+    start_time_scorer = time()
     poses, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, xyz_map=xyz_map, glctx=self.glctx, mesh_diameter=self.diameter, iteration=iteration, get_vis=self.debug>=2, precision=precision)
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_refiner.png', vis)
 
+    logging.info(f"\033[92m refiner predict time: {time()-start_time_scorer:.4f}\033[0m")
+
+    start_time_scorer = time()
     scores, vis = self.scorer.predict(mesh=self.mesh, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, mesh_tensors=self.mesh_tensors, glctx=self.glctx, mesh_diameter=self.diameter, get_vis=self.debug>=2, precision=precision)
+
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_score.png', vis)
+    logging.info(f"\033[92ms refiner score time: {time()-start_time_scorer:.4f}\033[0m")
 
     add_errs = self.compute_add_err_to_gt_pose(poses)
     logging.info(f"final, add_errs min:{add_errs.min()}")

@@ -169,8 +169,9 @@ class PoseRefinePredictor:
     @rgb: np array (H,W,3)
     @ob_in_cams: np array (N,4,4)
     '''
-    # This is a highly malicious way to set it, use with extreme caution
+    # This is a highly malicious way to set it because this is global, use with extreme caution
     # torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    start_predict_refine = time.time()
     logging.info(f'ob_in_cams:{ob_in_cams.shape}')
 
     tf_precision = get_tf_precision(precision)
@@ -201,17 +202,25 @@ class PoseRefinePredictor:
     if not isinstance(trans_normalizer, float):
       trans_normalizer = torch.as_tensor(list(trans_normalizer), device='cuda', dtype=tf_precision).reshape(1,3)
 
+    logging.info(f'predict_refine predict time : {time.time() - start_predict_refine}')
+
     for _ in range(iteration):
+      iteration_start = time.time()
       logging.info("making cropped data")
+      # most of the time is spent here it seems (except for the weird fuck that is happening at iteration 2)
       pose_data = make_crop_data_batch(self.cfg.input_resize, B_in_cams, mesh_centered, rgb_tensor, depth_tensor, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
       # logging.info("="*30+f" precision: {precision}, pose_data dtype: {pose_data.poseA.dtype}")
+      logging.info(f'make_crop_data_batch time : {time.time() - iteration_start}')
+      
       B_in_cams = []
       for b in range(0, pose_data.rgbAs.shape[0], bs):
         A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).float()
         B = torch.cat([pose_data.rgbBs[b:b+bs].cuda(), pose_data.xyz_mapBs[b:b+bs].cuda()], dim=1).float()
         logging.info("forward start")
         with torch.cuda.amp.autocast(enabled=self.amp):
-          output = self.model(A,B)
+          model_start_time = time.time()
+          output = self.model(A,B) #the initial loading of the model is slow, at around 0.5 seconds
+          logging.info(f'\033[93mmodel time: {time.time()-model_start_time:.4f}\033[0m')
         for k in output:
           output[k] = output[k].float()
         logging.info("forward done")
@@ -259,11 +268,13 @@ class PoseRefinePredictor:
         B_in_cams.append(B_in_cam)
 
       B_in_cams = torch.cat(B_in_cams, dim=0).reshape(len(ob_in_cams),4,4).to(dtype=tf_precision)
+      logging.info(f'\033[95miteration time: {time.time()-iteration_start:.2f}\033[0m')
 
     temp_tensor = torch.tensor(tf_to_center[None], device='cuda', dtype=tf_precision)
     # logging.info("="*30+f" With tf_precision being: {tf_precision}, B_in_cams type: {B_in_cams.dtype}, temp_tensor: {temp_tensor.dtype}")
 
     B_in_cams_out = B_in_cams@temp_tensor
+    
     torch.cuda.empty_cache()
     self.last_trans_update = trans_delta
     self.last_rot_update = rot_mat_delta

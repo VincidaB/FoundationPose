@@ -76,11 +76,11 @@ if __name__=='__main__':
 
       gt_rotation = np.array([-0.07963122209137952, -0.0751164820287667, -0.9939901322154824, 0.9916181604683285, 0.09581080499935263, -0.08668168189401496, 0.10174621806543538, -0.9925612348360231, 0.06685733667636427]).reshape(3,3)
       gt_pose_t =np.array([-100.31353924053144, 55.82813669281825, 1702.1111610000928]) /1000
-      # logging.info(f'gt_pose_t: {gt_pose_t}')
+      logging.info(f'gt_pose_t: {gt_pose_t}')
 
       # calculate the error in position
       estimated_position = pose[:3,3]
-      # logging.info(f'Estimated position: {estimated_position}')
+      logging.info(f'Estimated position: {estimated_position}')
       gt_position = gt_pose_t
       error = np.linalg.norm(estimated_position - gt_position)
 
@@ -101,7 +101,7 @@ if __name__=='__main__':
       # second run for performance evaluation
       start_time = time()
       #disable logging for second run
-      logging.getLogger().setLevel(logging.INFO)
+      logging.getLogger().setLevel(logging.ERROR)
       
       profile = args.profile
       if profile:
@@ -128,7 +128,6 @@ if __name__=='__main__':
         print(processed_output)
       logging.getLogger().setLevel(logging.INFO)
       logging.info(f'\033[93mregister time second run: {time()-start_time:.2f}\033[0m')
-      logging.getLogger().setLevel(logging.ERROR)
 
       # third run for performance evaluation
       start_time = time()
@@ -137,7 +136,6 @@ if __name__=='__main__':
       pose = est.register(K=reader.K, rgb=color, depth=depth, ob_mask=mask, iteration=args.est_refine_iter, precision=args.precision)
       logging.getLogger().setLevel(logging.INFO)
       logging.info(f'\033[93mregister time third run: {time()-start_time:.2f}\033[0m')
-      logging.getLogger().setLevel(logging.ERROR)
 
       if debug>=3:
         m = mesh.copy()
