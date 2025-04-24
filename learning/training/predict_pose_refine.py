@@ -23,17 +23,21 @@ from datareader import *
 
 
 @torch.inference_mode()
-def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_ratio, xyz_map, normal_map=None, mesh_diameter=None, cfg=None, glctx=None, mesh_tensors=None, dataset:PoseRefinePairH5Dataset=None):
+def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_ratio, xyz_map, normal_map=None, mesh_diameter=None, cfg=None, glctx=None, mesh_tensors=None, dataset:PoseRefinePairH5Dataset=None, precision=None):
   logging.info("Welcome make_crop_data_batch")
+  # logging.info("="*30+f"ob_in_cams=B_in_cams is of dtype: {ob_in_cams.dtype}")
   H,W = depth.shape[:2]
   args = []
   method = 'box_3d'
-  tf_to_crops = compute_crop_window_tf_batch(pts=mesh.vertices, H=H, W=W, poses=ob_in_cams, K=K, crop_ratio=crop_ratio, out_size=(render_size[1], render_size[0]), method=method, mesh_diameter=mesh_diameter)
+  tf_to_crops = compute_crop_window_tf_batch(pts=mesh.vertices, H=H, W=W, poses=ob_in_cams, K=K, crop_ratio=crop_ratio, out_size=(render_size[1], render_size[0]), method=method, mesh_diameter=mesh_diameter, precision=precision)
+  tf_precision = get_tf_precision(precision)
 
   logging.info("make tf_to_crops done")
 
   B = len(ob_in_cams)
-  poseA = torch.as_tensor(ob_in_cams, dtype=torch.float, device='cuda')
+  poseA = torch.as_tensor(ob_in_cams, dtype=tf_precision, device='cuda')
+  # logging.info("="*30+f" poseA original: {poseA.dtype}")
+
 
   bs = 512
   rgb_rs = []
@@ -41,12 +45,21 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
   normal_rs = []
   xyz_map_rs = []
 
-  bbox2d_crop = torch.as_tensor(np.array([0, 0, cfg['input_resize'][0]-1, cfg['input_resize'][1]-1]).reshape(2,2), device='cuda', dtype=torch.float)
-  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops.inverse()).reshape(-1,4)
+  bbox2d_crop = torch.as_tensor(np.array([0, 0, cfg['input_resize'][0]-1, cfg['input_resize'][1]-1]).reshape(2,2), device='cuda', dtype=tf_precision)
+  # logging.info("="*30+f" bbox2d_crop: {bbox2d_crop.dtype}, tf_to_crops: {tf_to_crops.dtype}")
+  # linalg, used for .inverse, does not support float16
+  if precision is None or precision < 32:
+    tf_to_crops_copy = tf_to_crops.to(dtype=torch.float32)
+    bbox2d_crop = bbox2d_crop.to(dtype=torch.float32, copy=False)
+  else:
+    tf_to_crops_copy = tf_to_crops
+  # logging.info("="*30+f" bbox2d_crop: {bbox2d_crop.dtype}, tf_to_crops_copy: {tf_to_crops_copy.dtype}")
+  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()).reshape(-1,4)
 
   for b in range(0,len(poseA),bs):
     extra = {}
-    rgb_r, depth_r, normal_r = nvdiffrast_render(K=K, H=H, W=W, ob_in_cams=poseA[b:b+bs], context='cuda', get_normal=cfg['use_normal'], glctx=glctx, mesh_tensors=mesh_tensors, output_size=cfg['input_resize'], bbox2d=bbox2d_ori[b:b+bs], use_light=True, extra=extra)
+    rgb_r, depth_r, normal_r = nvdiffrast_render(K=K, H=H, W=W, ob_in_cams=poseA[b:b+bs], context='cuda', get_normal=cfg['use_normal'], glctx=glctx, mesh_tensors=mesh_tensors, output_size=cfg['input_resize'], bbox2d=bbox2d_ori[b:b+bs], use_light=True, extra=extra, precision=precision)
+    # logging.info("="*30+f" poseA secondary: {poseA.dtype}")
     rgb_rs.append(rgb_r)
     depth_rs.append(depth_r[...,None])
     normal_rs.append(normal_r)
@@ -54,13 +67,15 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
   rgb_rs = torch.cat(rgb_rs, dim=0).permute(0,3,1,2) * 255
   depth_rs = torch.cat(depth_rs, dim=0).permute(0,3,1,2)  #(B,1,H,W)
   xyz_map_rs = torch.cat(xyz_map_rs, dim=0).permute(0,3,1,2)  #(B,3,H,W)
-  Ks = torch.as_tensor(K, device='cuda', dtype=torch.float).reshape(1,3,3)
+  Ks = torch.as_tensor(K, device='cuda', dtype=tf_precision).reshape(1,3,3)
   if cfg['use_normal']:
     normal_rs = torch.cat(normal_rs, dim=0).permute(0,3,1,2)  #(B,3,H,W)
 
   logging.info("render done")
 
-  rgbBs = kornia.geometry.transform.warp_perspective(torch.as_tensor(rgb, dtype=torch.float, device='cuda').permute(2,0,1)[None].expand(B,-1,-1,-1), tf_to_crops, dsize=render_size, mode='bilinear', align_corners=False)
+  # logging.info("="*30+f" rgb: {rgb.dtype}, tf_to_crops: {tf_to_crops.dtype}")
+
+  rgbBs = kornia.geometry.transform.warp_perspective(torch.as_tensor(rgb, dtype=tf_precision, device='cuda').permute(2,0,1)[None].expand(B,-1,-1,-1), tf_to_crops, dsize=render_size, mode='bilinear', align_corners=False)
   if rgb_rs.shape[-2:]!=cfg['input_resize']:
     rgbAs = kornia.geometry.transform.warp_perspective(rgb_rs, tf_to_crops, dsize=render_size, mode='bilinear', align_corners=False)
   else:
@@ -69,20 +84,22 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
     xyz_mapAs = kornia.geometry.transform.warp_perspective(xyz_map_rs, tf_to_crops, dsize=render_size, mode='nearest', align_corners=False)
   else:
     xyz_mapAs = xyz_map_rs
-  xyz_mapBs = kornia.geometry.transform.warp_perspective(torch.as_tensor(xyz_map, device='cuda', dtype=torch.float).permute(2,0,1)[None].expand(B,-1,-1,-1), tf_to_crops, dsize=render_size, mode='nearest', align_corners=False)  #(B,3,H,W)
+  # logging.info("="*30+f" xyz_map: {rgb.dtype}, tf_to_crops: {tf_to_crops.dtype}")
+  xyz_mapBs = kornia.geometry.transform.warp_perspective(torch.as_tensor(xyz_map, device='cuda', dtype=tf_precision).permute(2,0,1)[None].expand(B,-1,-1,-1), tf_to_crops, dsize=render_size, mode='nearest', align_corners=False)  #(B,3,H,W)
 
   if cfg['use_normal']:
     normalAs = kornia.geometry.transform.warp_perspective(normal_rs, tf_to_crops, dsize=render_size, mode='nearest', align_corners=False)
-    normalBs = kornia.geometry.transform.warp_perspective(torch.as_tensor(normal_map, dtype=torch.float, device='cuda').permute(2,0,1)[None].expand(B,-1,-1,-1), tf_to_crops, dsize=render_size, mode='nearest', align_corners=False)
+    normalBs = kornia.geometry.transform.warp_perspective(torch.as_tensor(normal_map, dtype=tf_precision, device='cuda').permute(2,0,1)[None].expand(B,-1,-1,-1), tf_to_crops, dsize=render_size, mode='nearest', align_corners=False)
   else:
     normalAs = None
     normalBs = None
 
   logging.info("warp done")
 
-  mesh_diameters = torch.ones((len(rgbAs)), dtype=torch.float, device='cuda')*mesh_diameter
+  mesh_diameters = torch.ones((len(rgbAs)), dtype=tf_precision, device='cuda')*mesh_diameter
   pose_data = BatchPoseData(rgbAs=rgbAs, rgbBs=rgbBs, depthAs=None, depthBs=None, normalAs=normalAs, normalBs=normalBs, poseA=poseA, poseB=None, xyz_mapAs=xyz_mapAs, xyz_mapBs=xyz_mapBs, tf_to_crops=tf_to_crops, Ks=Ks, mesh_diameters=mesh_diameters)
-  pose_data = dataset.transform_batch(batch=pose_data, H_ori=H, W_ori=W, bound=1)
+  pose_data = dataset.transform_batch(batch=pose_data, H_ori=H, W_ori=W, bound=1, precision=precision)
+  # logging.info("="*30+f" poseA tertiary: {poseA.dtype}")
 
   logging.info("pose batch data done")
 
@@ -147,16 +164,21 @@ class PoseRefinePredictor:
 
 
   @torch.inference_mode()
-  def predict(self, rgb, depth, K, ob_in_cams, xyz_map, normal_map=None, get_vis=False, mesh=None, mesh_tensors=None, glctx=None, mesh_diameter=None, iteration=5):
+  def predict(self, rgb, depth, K, ob_in_cams, xyz_map, normal_map=None, get_vis=False, mesh=None, mesh_tensors=None, glctx=None, mesh_diameter=None, iteration=5, precision=None):
     '''
     @rgb: np array (H,W,3)
     @ob_in_cams: np array (N,4,4)
     '''
+    # This is a highly malicious way to set it because this is global, use with extreme caution
+    # torch.set_default_tensor_type('torch.cuda.FloatTensor')
     start_predict_refine = time.time()
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
     logging.info(f'ob_in_cams:{ob_in_cams.shape}')
-    tf_to_center = np.eye(4)
-    ob_centered_in_cams = ob_in_cams
+
+    tf_precision = get_tf_precision(precision)
+    np_precision = get_np_precision(precision)
+
+    tf_to_center = np.eye(4, dtype=np_precision)
+    ob_centered_in_cams = ob_in_cams.astype(dtype=np_precision)
     mesh_centered = mesh
 
     logging.info(f'self.cfg.use_normal:{self.cfg.use_normal}')
@@ -167,28 +189,29 @@ class PoseRefinePredictor:
     logging.info(f"trans_normalizer:{self.cfg['trans_normalizer']}, rot_normalizer:{self.cfg['rot_normalizer']}")
     bs = 1024
 
-    B_in_cams = torch.as_tensor(ob_centered_in_cams, device='cuda', dtype=torch.float)
-
+    B_in_cams = torch.as_tensor(ob_centered_in_cams, device='cuda', dtype=tf_precision)
+    # logging.info("="*30+f" B_in_cams before make_crop_data_batch dtype: {B_in_cams.dtype}")
 
     if mesh_tensors is None:
       mesh_tensors = make_mesh_tensors(mesh_centered)
 
-    rgb_tensor = torch.as_tensor(rgb, device='cuda', dtype=torch.float)
-    depth_tensor = torch.as_tensor(depth, device='cuda', dtype=torch.float)
-    xyz_map_tensor = torch.as_tensor(xyz_map, device='cuda', dtype=torch.float)
+    rgb_tensor = torch.as_tensor(rgb, device='cuda', dtype=tf_precision)
+    depth_tensor = torch.as_tensor(depth, device='cuda', dtype=tf_precision)
+    xyz_map_tensor = torch.as_tensor(xyz_map, device='cuda', dtype=tf_precision)
     trans_normalizer = self.cfg['trans_normalizer']
     if not isinstance(trans_normalizer, float):
-      trans_normalizer = torch.as_tensor(list(trans_normalizer), device='cuda', dtype=torch.float).reshape(1,3)
+      trans_normalizer = torch.as_tensor(list(trans_normalizer), device='cuda', dtype=tf_precision).reshape(1,3)
 
     logging.info(f'predict_refine predict time : {time.time() - start_predict_refine}')
 
     for _ in range(iteration):
       iteration_start = time.time()
       logging.info("making cropped data")
-
       # most of the time is spent here it seems (except for the weird fuck that is happening at iteration 2)
-      pose_data = make_crop_data_batch(self.cfg.input_resize, B_in_cams, mesh_centered, rgb_tensor, depth_tensor, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter)
+      pose_data = make_crop_data_batch(self.cfg.input_resize, B_in_cams, mesh_centered, rgb_tensor, depth_tensor, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
+      # logging.info("="*30+f" precision: {precision}, pose_data dtype: {pose_data.poseA.dtype}")
       logging.info(f'make_crop_data_batch time : {time.time() - iteration_start}')
+      
       B_in_cams = []
       for b in range(0, pose_data.rgbAs.shape[0], bs):
         A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).float()
@@ -219,7 +242,7 @@ class PoseRefinePredictor:
           uvA_crop = project_and_transform_to_crop(pose_data.poseA[b:b+bs][...,:3,3])
           uv_pred_crop = uvA_crop + output['trans'][:,:2]*self.cfg['input_resize'][0]
           uv_pred = transform_pts(uv_pred_crop, pose_data.tf_to_crops[b:b+bs].inverse().cuda())
-          center_pred = torch.cat([uv_pred, torch.ones((len(rot_delta),1), dtype=torch.float, device='cuda')], dim=-1)
+          center_pred = torch.cat([uv_pred, torch.ones((len(rot_delta),1), dtype=tf_precision, device='cuda')], dim=-1)
           center_pred = (pose_data.Ks[b:b+bs].inverse().cuda()@center_pred.reshape(len(rot_delta),3,1)).reshape(len(rot_delta),3) * z_pred.reshape(len(rot_delta),1)
           trans_delta = center_pred-pose_data.poseA[b:b+bs][...,:3,3]
 
@@ -237,14 +260,21 @@ class PoseRefinePredictor:
         if self.cfg['normalize_xyz']:
           trans_delta *= (mesh_diameter/2)
 
+        trans_delta = trans_delta.to(dtype=tf_precision)
+        rot_mat_delta = rot_mat_delta.to(dtype=tf_precision)
+        # logging.info("="*30+f" pose_data.poseA: {pose_data.poseA.dtype}, trans_delta: {trans_delta.dtype}, rot_mat_delta: {rot_mat_delta.dtype}")
         B_in_cam = egocentric_delta_pose_to_pose(pose_data.poseA[b:b+bs], trans_delta=trans_delta, rot_mat_delta=rot_mat_delta)
+        # logging.info("="*30+f" B_in_cam with no 's' type: {B_in_cam.dtype}")
         B_in_cams.append(B_in_cam)
 
-      B_in_cams = torch.cat(B_in_cams, dim=0).reshape(len(ob_in_cams),4,4)
-
+      B_in_cams = torch.cat(B_in_cams, dim=0).reshape(len(ob_in_cams),4,4).to(dtype=tf_precision)
       logging.info(f'\033[95miteration time: {time.time()-iteration_start:.2f}\033[0m')
 
-    B_in_cams_out = B_in_cams@torch.tensor(tf_to_center[None], device='cuda', dtype=torch.float)
+    temp_tensor = torch.tensor(tf_to_center[None], device='cuda', dtype=tf_precision)
+    # logging.info("="*30+f" With tf_precision being: {tf_precision}, B_in_cams type: {B_in_cams.dtype}, temp_tensor: {temp_tensor.dtype}")
+
+    B_in_cams_out = B_in_cams@temp_tensor
+    
     torch.cuda.empty_cache()
     self.last_trans_update = trans_delta
     self.last_rot_update = rot_mat_delta
@@ -253,7 +283,7 @@ class PoseRefinePredictor:
       logging.info("get_vis...")
       canvas = []
       padding = 2
-      pose_data = make_crop_data_batch(self.cfg.input_resize, torch.as_tensor(ob_centered_in_cams), mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter)
+      pose_data = make_crop_data_batch(self.cfg.input_resize, torch.as_tensor(ob_centered_in_cams), mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
       for id in range(0, len(B_in_cams)):
         rgbA_vis = (pose_data.rgbAs[id]*255).permute(1,2,0).data.cpu().numpy()
         rgbB_vis = (pose_data.rgbBs[id]*255).permute(1,2,0).data.cpu().numpy()
