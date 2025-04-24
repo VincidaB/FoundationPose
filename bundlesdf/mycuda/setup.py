@@ -35,6 +35,8 @@ setup(
     include_dirs=[
         "/usr/local/include/eigen3",
         "/usr/include/eigen3",
+        os.path.join(os.environ['CONDA_PREFIX'], 'include', 'eigen3'),
+
     ],
     cmdclass={
         'build_ext': BuildExtension

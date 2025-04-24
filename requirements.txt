@@ -8,8 +8,8 @@ torchaudio==2.0.1+cu118
 
 
 # JupyterLab
-jupyterlab==4.1.5
-ipywidgets==8.1.2
+# jupyterlab==4.1.5
+# ipywidgets==8.1.2
 
 
 # Common Libraries
@@ -49,9 +49,9 @@ omegaconf==2.3.0
 pypng==0.20220715.0
 Panda3D==1.10.14
 simplejson==3.19.2
-bokeh==3.4.0
+# bokeh==3.4.0
 roma==1.4.4
-seaborn==0.13.2
+# seaborn==0.13.2
 pin==2.7.0
 openpyxl==3.1.2
 torchnet==0.0.4
@@ -64,14 +64,14 @@ timm==0.9.16
 albumentations==1.4.2
 xatlas==0.0.9
 nodejs==0.1.1
-jupyterlab==4.1.5
-objaverse==0.1.7
+# jupyterlab==4.1.5
+# objaverse==0.1.7
 g4f==0.2.7.1
-ultralytics==8.0.120
-pycocotools==2.0.7
-py-spy==0.3.14
+ultralytics==8.3.61
+# pycocotools==2.0.7
+# py-spy==0.3.14
 pybullet==3.2.6
-videoio==0.2.8
+# videoio==0.2.8
 kornia==0.7.2
 einops==0.7.0
 transformations==2024.6.1
@@ -80,3 +80,7 @@ warp-lang==1.0.2
 
 # For PyTorch3D
 fvcore==0.1.5.post20221221
+
+#empy==3.3.2
+#catkin_pkg==1.0.0
+#lark
