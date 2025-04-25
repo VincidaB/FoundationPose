@@ -6,7 +6,8 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-
+import os, sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 from Utils import *
 from datareader import *
 import itertools
@@ -203,10 +204,10 @@ class FoundationPose:
       else:
         self.glctx = glctx
 
-    depth = erode_depth(depth, radius=2, device='cuda', precision=precision)
-    depth = bilateral_filter_depth(depth, radius=2, device='cuda', precision=precision)
-    # logging.info("="*30+f" DEPTH DTYPE: {depth.dtype}")
-
+    #depth = erode_depth(depth, radius=2, device='cuda')
+    #depth = bilateral_filter_depth(depth, radius=2, device='cuda')
+    logging.info("="*30+f" DEPTH DTYPE: {depth.dtype}")
+    
     if self.debug>=2:
       xyz_map = depth2xyzmap(depth, K, precision=precision)
       valid = xyz_map[...,2]>=0.001
