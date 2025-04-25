@@ -80,7 +80,8 @@ warp-lang==1.0.2
 
 # For PyTorch3D
 fvcore==0.1.5.post20221221
-
 #empy==3.3.2
 #catkin_pkg==1.0.0
 #lark
+
+fastapi
