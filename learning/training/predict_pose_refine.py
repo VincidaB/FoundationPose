@@ -214,8 +214,8 @@ class PoseRefinePredictor:
       
       B_in_cams = []
       for b in range(0, pose_data.rgbAs.shape[0], bs):
-        A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).float()
-        B = torch.cat([pose_data.rgbBs[b:b+bs].cuda(), pose_data.xyz_mapBs[b:b+bs].cuda()], dim=1).float()
+        A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).to(dtype=tf_precision)
+        B = torch.cat([pose_data.rgbBs[b:b+bs].cuda(), pose_data.xyz_mapBs[b:b+bs].cuda()], dim=1).to(dtype=tf_precision)
         logging.info("forward start")
         with torch.cuda.amp.autocast(enabled=self.amp):
           model_start_time = time.time()
@@ -263,7 +263,7 @@ class PoseRefinePredictor:
         trans_delta = trans_delta.to(dtype=tf_precision)
         rot_mat_delta = rot_mat_delta.to(dtype=tf_precision)
         # logging.info("="*30+f" pose_data.poseA: {pose_data.poseA.dtype}, trans_delta: {trans_delta.dtype}, rot_mat_delta: {rot_mat_delta.dtype}")
-        B_in_cam = egocentric_delta_pose_to_pose(pose_data.poseA[b:b+bs], trans_delta=trans_delta, rot_mat_delta=rot_mat_delta)
+        B_in_cam = egocentric_delta_pose_to_pose(pose_data.poseA[b:b+bs], trans_delta=trans_delta, rot_mat_delta=rot_mat_delta, precision=precision)
         # logging.info("="*30+f" B_in_cam with no 's' type: {B_in_cam.dtype}")
         B_in_cams.append(B_in_cam)
 
