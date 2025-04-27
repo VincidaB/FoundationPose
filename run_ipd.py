@@ -28,7 +28,7 @@ if __name__=='__main__':
   set_logging_format(level=logging.INFO)
   set_seed(0)
 
-  if args.precision not in [64, 32, 16]:
+  if args.precision not in [64, 32, 16, None]:
     raise ValueError(f"Precision must be 64, 32 or 16 (default: 32). Your value: {args.precision}.")
 
   mesh = trimesh.load(args.mesh_file)
