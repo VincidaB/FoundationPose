@@ -228,7 +228,7 @@ class FoundationPose:
     if valid.sum()<4:
       logging.info(f'valid too small, return')
       pose = np.eye(4)
-      pose[:3,3] = self.guess_translation(depth=depth, mask=ob_mask, K=K)
+      pose[:3,3] = self.guess_translation(depth=depth, mask=ob_mask, K=K, precision=precision)
       return pose
 
     if self.debug>=2:
