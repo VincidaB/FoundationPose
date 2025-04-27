@@ -203,6 +203,7 @@ class FoundationPose:
     logging.info("="*30+f" Registering with precision {precision}")
     
     np_precision = get_np_precision(precision)
+    tf_precision = get_tf_precision(precision)
 
     if self.glctx is None:
       if glctx is None:
@@ -249,9 +250,9 @@ class FoundationPose:
     logging.info("="*30+f" K : {K.dtype}, rgb : {rgb.dtype}, depth : {depth.dtype}")
     poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None, precision=precision)
     # logging.info("="*30+f" poses dtype: {poses.dtype}")
-    poses = poses.data.cpu().numpy()
+    # poses = poses.data.cpu().numpy()
     # logging.info("="*30+f" poses dtype: {poses.dtype}")
-    logging.info(f'poses:{poses.shape}')
+    # logging.info(f'poses:{poses.shape}')
     logging.info(f"\033[92mgenerate_random_pose_hypo time: {time()-start_time_poses:.4f}\033[0m")
 
 
@@ -260,7 +261,8 @@ class FoundationPose:
     logging.info(f"\033[92mguess_translation time: {time()-start_time_guess_translation:.4f}\033[0m")
 
 
-    poses = torch.as_tensor(poses, device='cuda', dtype=torch.float)
+    # poses = poses.to(device='cuda', dtype=tf_precision)
+    logging.info("="*30+f" poses info: {poses.dtype, poses.device}")
     poses[:,:3,3] = torch.as_tensor(center.reshape(1,3), device='cuda')
 
     start_add_errs = time()
