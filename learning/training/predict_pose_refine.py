@@ -27,10 +27,10 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
   logging.info("Welcome make_crop_data_batch")
   # logging.info("="*30+f"ob_in_cams=B_in_cams is of dtype: {ob_in_cams.dtype}")
   H,W = depth.shape[:2]
-  args = []
+  # args = []
   method = 'box_3d'
   tf_precision = get_tf_precision(precision)
-  logging.info("="*30+f" Devices for ob_in_cams : {ob_in_cams.device}, K : {type(K)}")
+  # logging.info("="*30+f" Devices for ob_in_cams : {ob_in_cams.device}, K : {type(K)}")
   tf_to_crops = compute_crop_window_tf_batch(pts=mesh.vertices, H=H, W=W, poses=ob_in_cams, K=K, crop_ratio=crop_ratio, out_size=(render_size[1], render_size[0]), method=method, mesh_diameter=mesh_diameter, precision=precision)
 
   logging.info("make tf_to_crops done")
@@ -42,7 +42,7 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
   bs = 512
   rgb_rs = []
-  depth_rs = []
+  # depth_rs = []
   normal_rs = []
   xyz_map_rs = []
 
@@ -283,8 +283,7 @@ class PoseRefinePredictor:
       logging.info("get_vis...")
       canvas = []
       padding = 2
-      # logging.info("="*30+f" Devices for K {K.device}, ")
-      pose_data = make_crop_data_batch(self.cfg.input_resize, torch.as_tensor(ob_centered_in_cams, dtype=tf_precision), mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
+      pose_data = make_crop_data_batch(self.cfg.input_resize, torch.as_tensor(ob_centered_in_cams, dtype=tf_precision, device='cuda'), mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
       for id in range(0, len(B_in_cams)):
         rgbA_vis = (pose_data.rgbAs[id]*255).permute(1,2,0).data.cpu().numpy()
         rgbB_vis = (pose_data.rgbBs[id]*255).permute(1,2,0).data.cpu().numpy()

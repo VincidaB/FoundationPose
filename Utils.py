@@ -618,7 +618,7 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
     tf_precision_debug = torch.float32
   else:
     tf_precision_debug = tf_precision
-  logging.info("="*30+f" tf_precision_debug : {tf_precision_debug}")
+  # logging.info("="*30+f" tf_precision_debug : {tf_precision_debug}")
 
   B = len(poses)
   # This is a highly malicious way to set it, use with extreme caution
@@ -633,7 +633,7 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
                         dtype=tf_precision_debug,
                         device=poses.device).reshape(-1,3)
     pts = poses[:,:3,3].reshape(-1,1,3)+offsets.reshape(1,-1,3)
-    logging.info("="*30+f" DEVICES: {poses.device, offsets.device, pts.device}")
+    # logging.info("="*30+f" DEVICES: {poses.device, offsets.device, pts.device}")
     pts = pts.to(dtype=tf_precision_debug)
     K = torch.as_tensor(K, dtype=tf_precision_debug, device=poses.device)
     # logging.info("="*30+f" TYPE OF K: {K.dtype}, TYPE OF pts: {pts.dtype}")

@@ -155,18 +155,18 @@ class FoundationPose:
     @scene_pts: torch tensor (N,3)
     '''
     tf_precision = get_tf_precision(precision)
-    logging.info("="*30+f" From hypo, precision is {precision}, tf_precision : {tf_precision}")
+    # logging.info("="*30+f" From hypo, precision is {precision}, tf_precision : {tf_precision}")
     ob_in_cams = self.rot_grid.clone()
     center = self.guess_translation(depth=depth, mask=mask, K=K, precision=precision)
     ob_in_cams[:,:3,3] = (torch.tensor(center, device='cuda').reshape(1,3))
     ob_in_cams = ob_in_cams.to(dtype=tf_precision, copy=False)  # For some reason, you can't do it in the previous line
-    logging.info("="*30+f" ob_in_cams dtype : {ob_in_cams.dtype}")
+    # logging.info("="*30+f" ob_in_cams dtype : {ob_in_cams.dtype}")
     return ob_in_cams
 
 
   def guess_translation(self, depth, mask, K, precision=None):
     np_precision = get_np_precision(precision)
-    print("="*30+f" K IS OF DTYPE: {type(K)}, precision is {precision} ")
+    # logging.info("="*30+f" K IS OF DTYPE: {type(K)}, precision is {precision} ")
     vs,us = np.where(mask>0)
     if len(us)==0:
       logging.info(f'mask is all zero')
@@ -184,13 +184,13 @@ class FoundationPose:
     else:
       K_copy = K
     center = (np.linalg.inv(K_copy)@np.asarray([uc,vc,1]).reshape(3,1)).astype(dtype=np_precision)*zc
-    logging.info("="*30+f" center dtype: {center.dtype}")
+    # logging.info("="*30+f" center dtype: {center.dtype}")
 
     if self.debug>=2:
       pcd = toOpen3dCloud(center.reshape(1,3))
       o3d.io.write_point_cloud(f'{self.debug_dir}/init_center.ply', pcd)
     logging.info(f'guess_translation: {center.reshape(3)}')
-    logging.info("="*30+f" center dtype: {center.dtype}")
+    # logging.info("="*30+f" center dtype: {center.dtype}")
     return center.reshape(3)
 
 
@@ -200,7 +200,7 @@ class FoundationPose:
     '''
     set_seed(0)
     logging.info('Welcome')
-    logging.info("="*30+f" Registering with precision {precision}")
+    # logging.info("="*30+f" Registering with precision {precision}")
     
     np_precision = get_np_precision(precision)
     tf_precision = get_tf_precision(precision)
@@ -222,7 +222,7 @@ class FoundationPose:
       pcd = toOpen3dCloud(xyz_map[valid], rgb[valid])
       o3d.io.write_point_cloud(f'{self.debug_dir}/scene_raw.ply',pcd)
       cv2.imwrite(f'{self.debug_dir}/ob_mask.png', (ob_mask*255.0).clip(0,255))
-      logging.info("="*30+f" xyz_map : {xyz_map.dtype}")
+      # logging.info("="*30+f" xyz_map : {xyz_map.dtype}")
 
     normal_map = None
     valid = (depth>=0.001) & (ob_mask>0)
@@ -238,7 +238,7 @@ class FoundationPose:
       valid = xyz_map[...,2]>=0.001
       pcd = toOpen3dCloud(xyz_map[valid], rgb[valid])
       o3d.io.write_point_cloud(f'{self.debug_dir}/scene_complete.ply',pcd)
-      logging.info("="*30+f" pcd : {type(pcd)}")
+      # logging.info("="*30+f" pcd : {type(pcd)}")
 
     self.H, self.W = depth.shape[:2]
     K = K.astype(dtype=np_precision, copy=False)
@@ -247,7 +247,7 @@ class FoundationPose:
     self.ob_mask = ob_mask
 
     start_time_poses = time()
-    logging.info("="*30+f" K : {K.dtype}, rgb : {rgb.dtype}, depth : {depth.dtype}")
+    # logging.info("="*30+f" K : {K.dtype}, rgb : {rgb.dtype}, depth : {depth.dtype}")
     poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None, precision=precision)
     # logging.info("="*30+f" poses dtype: {poses.dtype}")
     # poses = poses.data.cpu().numpy()
