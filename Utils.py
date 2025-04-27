@@ -647,7 +647,7 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
     right = center[:,0]+radius
     top = center[:,1]-radius
     bottom = center[:,1]+radius
-    tfs = compute_tf_batch(left, right, top, bottom)
+    tfs = compute_tf_batch(left, right, top, bottom)  # Can't use float16 for @ operator, so leave it at that
     return tfs.to(device='cuda', dtype=tf_precision)
 
   else:

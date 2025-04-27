@@ -47,15 +47,14 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
   xyz_map_rs = []
 
   bbox2d_crop = torch.as_tensor(np.array([0, 0, cfg['input_resize'][0]-1, cfg['input_resize'][1]-1]).reshape(2,2), device='cuda', dtype=tf_precision)
-  # logging.info("="*30+f" bbox2d_crop: {bbox2d_crop.dtype}, tf_to_crops: {tf_to_crops.dtype}")
   # linalg, used for .inverse, does not support float16
   if precision is None or precision < 32:
     tf_to_crops_copy = tf_to_crops.to(dtype=torch.float32)
     bbox2d_crop = bbox2d_crop.to(dtype=torch.float32, copy=False)
   else:
     tf_to_crops_copy = tf_to_crops
-  # logging.info("="*30+f" bbox2d_crop: {bbox2d_crop.dtype}, tf_to_crops_copy: {tf_to_crops_copy.dtype}")
-  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()).reshape(-1,4)
+  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()).reshape(-1,4).to(dtype=tf_precision)
+  # logging.info("="*30+f" bbox2d_ori : {bbox2d_ori.dtype}")
 
   for b in range(0,len(poseA),bs):
     extra = {}
