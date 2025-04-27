@@ -61,11 +61,11 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
     rgb_r, depth_r, normal_r = nvdiffrast_render(K=K, H=H, W=W, ob_in_cams=poseA[b:b+bs], context='cuda', get_normal=cfg['use_normal'], glctx=glctx, mesh_tensors=mesh_tensors, output_size=cfg['input_resize'], bbox2d=bbox2d_ori[b:b+bs], use_light=True, extra=extra, precision=precision)
     # logging.info("="*30+f" poseA secondary: {poseA.dtype}")
     rgb_rs.append(rgb_r)
-    depth_rs.append(depth_r[...,None])
+    # depth_rs.append(depth_r[...,None])
     normal_rs.append(normal_r)
     xyz_map_rs.append(extra['xyz_map'])
   rgb_rs = torch.cat(rgb_rs, dim=0).permute(0,3,1,2) * 255
-  depth_rs = torch.cat(depth_rs, dim=0).permute(0,3,1,2)  #(B,1,H,W)
+  # depth_rs = torch.cat(depth_rs, dim=0).permute(0,3,1,2)  #(B,1,H,W)
   xyz_map_rs = torch.cat(xyz_map_rs, dim=0).permute(0,3,1,2)  #(B,3,H,W)
   Ks = torch.as_tensor(K, device='cuda', dtype=tf_precision).reshape(1,3,3)
   if cfg['use_normal']:
