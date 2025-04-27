@@ -27,10 +27,11 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
   logging.info("Welcome make_crop_data_batch")
   # logging.info("="*30+f"ob_in_cams=B_in_cams is of dtype: {ob_in_cams.dtype}")
   H,W = depth.shape[:2]
-  args = []
+  # args = []
   method = 'box_3d'
-  tf_to_crops = compute_crop_window_tf_batch(pts=mesh.vertices, H=H, W=W, poses=ob_in_cams, K=K, crop_ratio=crop_ratio, out_size=(render_size[1], render_size[0]), method=method, mesh_diameter=mesh_diameter, precision=precision)
   tf_precision = get_tf_precision(precision)
+  # logging.info("="*30+f" Devices for ob_in_cams : {ob_in_cams.device}, K : {type(K)}")
+  tf_to_crops = compute_crop_window_tf_batch(pts=mesh.vertices, H=H, W=W, poses=ob_in_cams, K=K, crop_ratio=crop_ratio, out_size=(render_size[1], render_size[0]), method=method, mesh_diameter=mesh_diameter, precision=precision)
 
   logging.info("make tf_to_crops done")
 
@@ -41,31 +42,30 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
   bs = 512
   rgb_rs = []
-  depth_rs = []
+  # depth_rs = []
   normal_rs = []
   xyz_map_rs = []
 
   bbox2d_crop = torch.as_tensor(np.array([0, 0, cfg['input_resize'][0]-1, cfg['input_resize'][1]-1]).reshape(2,2), device='cuda', dtype=tf_precision)
-  # logging.info("="*30+f" bbox2d_crop: {bbox2d_crop.dtype}, tf_to_crops: {tf_to_crops.dtype}")
   # linalg, used for .inverse, does not support float16
   if precision is None or precision < 32:
     tf_to_crops_copy = tf_to_crops.to(dtype=torch.float32)
     bbox2d_crop = bbox2d_crop.to(dtype=torch.float32, copy=False)
   else:
     tf_to_crops_copy = tf_to_crops
-  # logging.info("="*30+f" bbox2d_crop: {bbox2d_crop.dtype}, tf_to_crops_copy: {tf_to_crops_copy.dtype}")
-  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()).reshape(-1,4)
+  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()).reshape(-1,4).to(dtype=tf_precision)
+  # logging.info("="*30+f" bbox2d_ori : {bbox2d_ori.dtype}")
 
   for b in range(0,len(poseA),bs):
     extra = {}
     rgb_r, depth_r, normal_r = nvdiffrast_render(K=K, H=H, W=W, ob_in_cams=poseA[b:b+bs], context='cuda', get_normal=cfg['use_normal'], glctx=glctx, mesh_tensors=mesh_tensors, output_size=cfg['input_resize'], bbox2d=bbox2d_ori[b:b+bs], use_light=True, extra=extra, precision=precision)
     # logging.info("="*30+f" poseA secondary: {poseA.dtype}")
     rgb_rs.append(rgb_r)
-    depth_rs.append(depth_r[...,None])
+    # depth_rs.append(depth_r[...,None])
     normal_rs.append(normal_r)
     xyz_map_rs.append(extra['xyz_map'])
   rgb_rs = torch.cat(rgb_rs, dim=0).permute(0,3,1,2) * 255
-  depth_rs = torch.cat(depth_rs, dim=0).permute(0,3,1,2)  #(B,1,H,W)
+  # depth_rs = torch.cat(depth_rs, dim=0).permute(0,3,1,2)  #(B,1,H,W)
   xyz_map_rs = torch.cat(xyz_map_rs, dim=0).permute(0,3,1,2)  #(B,3,H,W)
   Ks = torch.as_tensor(K, device='cuda', dtype=tf_precision).reshape(1,3,3)
   if cfg['use_normal']:
@@ -214,8 +214,8 @@ class PoseRefinePredictor:
       
       B_in_cams = []
       for b in range(0, pose_data.rgbAs.shape[0], bs):
-        A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).float()
-        B = torch.cat([pose_data.rgbBs[b:b+bs].cuda(), pose_data.xyz_mapBs[b:b+bs].cuda()], dim=1).float()
+        A = torch.cat([pose_data.rgbAs[b:b+bs].cuda(), pose_data.xyz_mapAs[b:b+bs].cuda()], dim=1).to(dtype=tf_precision)
+        B = torch.cat([pose_data.rgbBs[b:b+bs].cuda(), pose_data.xyz_mapBs[b:b+bs].cuda()], dim=1).to(dtype=tf_precision)
         logging.info("forward start")
         with torch.cuda.amp.autocast(enabled=self.amp):
           model_start_time = time.time()
@@ -263,7 +263,7 @@ class PoseRefinePredictor:
         trans_delta = trans_delta.to(dtype=tf_precision)
         rot_mat_delta = rot_mat_delta.to(dtype=tf_precision)
         # logging.info("="*30+f" pose_data.poseA: {pose_data.poseA.dtype}, trans_delta: {trans_delta.dtype}, rot_mat_delta: {rot_mat_delta.dtype}")
-        B_in_cam = egocentric_delta_pose_to_pose(pose_data.poseA[b:b+bs], trans_delta=trans_delta, rot_mat_delta=rot_mat_delta)
+        B_in_cam = egocentric_delta_pose_to_pose(pose_data.poseA[b:b+bs], trans_delta=trans_delta, rot_mat_delta=rot_mat_delta, precision=precision)
         # logging.info("="*30+f" B_in_cam with no 's' type: {B_in_cam.dtype}")
         B_in_cams.append(B_in_cam)
 
@@ -283,7 +283,7 @@ class PoseRefinePredictor:
       logging.info("get_vis...")
       canvas = []
       padding = 2
-      pose_data = make_crop_data_batch(self.cfg.input_resize, torch.as_tensor(ob_centered_in_cams), mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
+      pose_data = make_crop_data_batch(self.cfg.input_resize, torch.as_tensor(ob_centered_in_cams, dtype=tf_precision, device='cuda'), mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
       for id in range(0, len(B_in_cams)):
         rgbA_vis = (pose_data.rgbAs[id]*255).permute(1,2,0).data.cpu().numpy()
         rgbB_vis = (pose_data.rgbBs[id]*255).permute(1,2,0).data.cpu().numpy()
@@ -307,7 +307,7 @@ class PoseRefinePredictor:
         canvas.append(row)
       canvas = make_grid_image(canvas, nrow=1, padding=padding, pad_value=255)
 
-      pose_data = make_crop_data_batch(self.cfg.input_resize, B_in_cams, mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter)
+      pose_data = make_crop_data_batch(self.cfg.input_resize, B_in_cams, mesh_centered, rgb, depth, K, crop_ratio=crop_ratio, normal_map=normal_map, xyz_map=xyz_map_tensor, cfg=self.cfg, glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, mesh_diameter=mesh_diameter, precision=precision)
       canvas_refined = []
       for id in range(0, len(B_in_cams)):
         rgbA_vis = (pose_data.rgbAs[id]*255).permute(1,2,0).data.cpu().numpy()

@@ -60,7 +60,7 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
 
   tf_precision = get_tf_precision(precision)
 
-  args = []
+  # args = []
   method = 'box_3d'
   tf_to_crops = compute_crop_window_tf_batch(pts=mesh.vertices, H=H, W=W, poses=ob_in_cams, K=K, crop_ratio=crop_ratio, out_size=(render_size[1], render_size[0]), method=method, mesh_diameter=mesh_diameter, precision=precision)
   logging.info("make tf_to_crops done")
@@ -81,7 +81,7 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
     bbox2d_crop = bbox2d_crop.to(dtype=torch.float32, copy=False)
   else:
     tf_to_crops_copy = tf_to_crops
-  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()[:,None]).reshape(-1,4)
+  bbox2d_ori = transform_pts(bbox2d_crop, tf_to_crops_copy.inverse()[:,None]).reshape(-1,4).to(dtype=tf_precision)
 
   for b in range(0,len(ob_in_cams),bs):
     extra = {}
@@ -113,11 +113,11 @@ def make_crop_data_batch(render_size, ob_in_cams, mesh, rgb, depth, K, crop_rati
   normalAs = None
   normalBs = None
 
-  Ks = torch.as_tensor(K, dtype=torch.float).reshape(1,3,3).expand(len(rgbAs),3,3)
-  mesh_diameters = torch.ones((len(rgbAs)), dtype=torch.float, device='cuda')*mesh_diameter
+  Ks = torch.as_tensor(K, dtype=tf_precision).reshape(1,3,3).expand(len(rgbAs),3,3)
+  mesh_diameters = torch.ones((len(rgbAs)), dtype=tf_precision, device='cuda')*mesh_diameter
 
   pose_data = BatchPoseData(rgbAs=rgbAs, rgbBs=rgbBs, depthAs=depthAs, depthBs=depthBs, normalAs=normalAs, normalBs=normalBs, poseA=poseAs, xyz_mapAs=xyz_mapAs, tf_to_crops=tf_to_crops, Ks=Ks, mesh_diameters=mesh_diameters)
-  pose_data = dataset.transform_batch(pose_data, H_ori=H, W_ori=W, bound=1)
+  pose_data = dataset.transform_batch(pose_data, H_ori=H, W_ori=W, bound=1, precision=precision)
 
   logging.info("pose batch data done")
 
@@ -172,8 +172,9 @@ class ScorePredictor:
     '''
     @rgb: np array (H,W,3)
     '''
+    tf_precision = get_tf_precision(precision)
     logging.info(f"ob_in_cams:{ob_in_cams.shape}")
-    ob_in_cams = torch.as_tensor(ob_in_cams, dtype=torch.float, device='cuda')
+    ob_in_cams = torch.as_tensor(ob_in_cams, dtype=tf_precision, device='cuda')
 
     logging.info(f'self.cfg.use_normal:{self.cfg.use_normal}')
     if not self.cfg.use_normal:
@@ -184,8 +185,8 @@ class ScorePredictor:
     if mesh_tensors is None:
       mesh_tensors = make_mesh_tensors(mesh)
 
-    rgb = torch.as_tensor(rgb, device='cuda', dtype=torch.float)
-    depth = torch.as_tensor(depth, device='cuda', dtype=torch.float)
+    rgb = torch.as_tensor(rgb, device='cuda', dtype=tf_precision)
+    depth = torch.as_tensor(depth, device='cuda', dtype=tf_precision)
 
     pose_data = make_crop_data_batch(self.cfg.input_resize, ob_in_cams, mesh, rgb, depth, K, crop_ratio=self.cfg['crop_ratio'], glctx=glctx, mesh_tensors=mesh_tensors, dataset=self.dataset, cfg=self.cfg, mesh_diameter=mesh_diameter, precision=precision)
 
@@ -210,7 +211,7 @@ class ScorePredictor:
       return ids, scores
 
     pose_data_iter = pose_data
-    global_ids = torch.arange(len(ob_in_cams), device='cuda', dtype=torch.long)
+    global_ids = torch.arange(len(ob_in_cams), device='cuda', dtype=torch.int32)
     scores_global = torch.zeros((len(ob_in_cams)), dtype=torch.float, device='cuda')
 
     while 1:
