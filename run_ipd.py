@@ -28,16 +28,7 @@ if __name__=='__main__':
   set_logging_format(level=logging.INFO)
   set_seed(0)
 
-  if args.precision == 32:
-    tf_precision = torch.float32
-    np_precision = np.float32
-  elif args.precision == 16:
-    tf_precision = torch.float16
-    np_precision = np.float16
-  elif args.precision == 64:
-    tf_precision = torch.float64
-    np_precision = np.float64
-  else:
+  if args.precision not in [64, 32, 16]:
     raise ValueError(f"Precision must be 64, 32 or 16 (default: 32). Your value: {args.precision}.")
 
   mesh = trimesh.load(args.mesh_file)
@@ -64,7 +55,7 @@ if __name__=='__main__':
     color = reader.get_color(i)
     depth = reader.get_depth(i)
     # scale depth by a factor of 0.1
-    depth = (depth*0.1).astype(np_precision)
+    depth = (depth*0.1).astype(get_np_precision(args.precision))
     if i==0:
       mask = reader.get_mask(0).astype(bool)
       start_time = time()

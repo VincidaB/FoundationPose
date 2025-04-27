@@ -614,6 +614,12 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
     tf_precision = torch.float32
   # logging.info("="*30+f" tf_precision set to {tf_precision}")
 
+  if (precision is None or precision < 32) and poses.device == torch.device(type='cpu'):
+    tf_precision_debug = torch.float32
+  else:
+    tf_precision_debug = tf_precision
+  logging.info("="*30+f" tf_precision_debug : {tf_precision_debug}")
+
   B = len(poses)
   # This is a highly malicious way to set it, use with extreme caution
   # torch.set_default_tensor_type('torch.cuda.FloatTensor')
@@ -624,12 +630,12 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
                         -radius,0,0,
                         0,radius,0,
                         0,-radius,0],
-                        dtype=tf_precision,
+                        dtype=tf_precision_debug,
                         device=poses.device).reshape(-1,3)
     pts = poses[:,:3,3].reshape(-1,1,3)+offsets.reshape(1,-1,3)
-    # logging.info("="*30+f" DEVICES: {poses.device, offsets.device, pts.device}")
-    pts = pts.to(dtype=tf_precision)
-    K = torch.as_tensor(K, dtype=tf_precision, device=poses.device)
+    logging.info("="*30+f" DEVICES: {poses.device, offsets.device, pts.device}")
+    pts = pts.to(dtype=tf_precision_debug)
+    K = torch.as_tensor(K, dtype=tf_precision_debug, device=poses.device)
     # logging.info("="*30+f" TYPE OF K: {K.dtype}, TYPE OF pts: {pts.dtype}")
     projected = (K@pts.reshape(-1,3).T).T
     uvs = projected[:,:2]/projected[:,2:3]
@@ -642,7 +648,7 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None, c
     top = center[:,1]-radius
     bottom = center[:,1]+radius
     tfs = compute_tf_batch(left, right, top, bottom)
-    return tfs.to(device=poses.device, dtype=tf_precision)
+    return tfs.to(device='cuda', dtype=tf_precision)
 
   else:
     raise RuntimeError

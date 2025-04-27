@@ -150,19 +150,23 @@ class FoundationPose:
     logging.info(f"self.rot_grid: {self.rot_grid.shape}")
     logging.info(f"\033[92mmake_rotation_grid time: {time()-start_time:.4f}\033[0m")
 
-  def generate_random_pose_hypo(self, K, rgb, depth, mask, scene_pts=None):
+  def generate_random_pose_hypo(self, K, rgb, depth, mask, scene_pts=None, precision=None):
     '''
     @scene_pts: torch tensor (N,3)
     '''
+    tf_precision = get_tf_precision(precision)
+    logging.info("="*30+f" From hypo, precision is {precision}, tf_precision : {tf_precision}")
     ob_in_cams = self.rot_grid.clone()
-    center = self.guess_translation(depth=depth, mask=mask, K=K)
-    ob_in_cams[:,:3,3] = torch.tensor(center, device='cuda', dtype=torch.float).reshape(1,3)
+    center = self.guess_translation(depth=depth, mask=mask, K=K, precision=precision)
+    ob_in_cams[:,:3,3] = (torch.tensor(center, device='cuda').reshape(1,3))
+    ob_in_cams = ob_in_cams.to(dtype=tf_precision, copy=False)  # For some reason, you can't do it in the previous line
+    logging.info("="*30+f" ob_in_cams dtype : {ob_in_cams.dtype}")
     return ob_in_cams
 
 
   def guess_translation(self, depth, mask, K, precision=None):
     np_precision = get_np_precision(precision)
-    # print("="*30+f" K IS OF DTYPE: {type(K)} ")
+    print("="*30+f" K IS OF DTYPE: {type(K)}, precision is {precision} ")
     vs,us = np.where(mask>0)
     if len(us)==0:
       logging.info(f'mask is all zero')
@@ -175,16 +179,18 @@ class FoundationPose:
       return np.zeros((3))
 
     zc = np.median(depth[valid])
-    if precision is None or precision < 32:
+    if precision is None or precision < 32:  # linalg doesn't accept precision 16
       K_copy = K.astype(dtype=np.float32)
     else:
       K_copy = K
-    center = (np.linalg.inv(K_copy)@np.asarray([uc,vc,1]).reshape(3,1))*zc
+    center = (np.linalg.inv(K_copy)@np.asarray([uc,vc,1]).reshape(3,1)).astype(dtype=np_precision)*zc
+    logging.info("="*30+f" center dtype: {center.dtype}")
 
     if self.debug>=2:
       pcd = toOpen3dCloud(center.reshape(1,3))
       o3d.io.write_point_cloud(f'{self.debug_dir}/init_center.ply', pcd)
     logging.info(f'guess_translation: {center.reshape(3)}')
+    logging.info("="*30+f" center dtype: {center.dtype}")
     return center.reshape(3)
 
 
@@ -194,6 +200,7 @@ class FoundationPose:
     '''
     set_seed(0)
     logging.info('Welcome')
+    logging.info("="*30+f" Registering with precision {precision}")
     
     np_precision = get_np_precision(precision)
 
@@ -206,7 +213,7 @@ class FoundationPose:
 
     #depth = erode_depth(depth, radius=2, device='cuda')
     #depth = bilateral_filter_depth(depth, radius=2, device='cuda')
-    logging.info("="*30+f" DEPTH DTYPE: {depth.dtype}")
+    # logging.info("="*30+f" DEPTH DTYPE: {depth.dtype}")
     
     if self.debug>=2:
       xyz_map = depth2xyzmap(depth, K, precision=precision)
@@ -214,6 +221,7 @@ class FoundationPose:
       pcd = toOpen3dCloud(xyz_map[valid], rgb[valid])
       o3d.io.write_point_cloud(f'{self.debug_dir}/scene_raw.ply',pcd)
       cv2.imwrite(f'{self.debug_dir}/ob_mask.png', (ob_mask*255.0).clip(0,255))
+      logging.info("="*30+f" xyz_map : {xyz_map.dtype}")
 
     normal_map = None
     valid = (depth>=0.001) & (ob_mask>0)
@@ -229,6 +237,7 @@ class FoundationPose:
       valid = xyz_map[...,2]>=0.001
       pcd = toOpen3dCloud(xyz_map[valid], rgb[valid])
       o3d.io.write_point_cloud(f'{self.debug_dir}/scene_complete.ply',pcd)
+      logging.info("="*30+f" pcd : {type(pcd)}")
 
     self.H, self.W = depth.shape[:2]
     K = K.astype(dtype=np_precision, copy=False)
@@ -237,7 +246,9 @@ class FoundationPose:
     self.ob_mask = ob_mask
 
     start_time_poses = time()
-    poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None)
+    logging.info("="*30+f" K : {K.dtype}, rgb : {rgb.dtype}, depth : {depth.dtype}")
+    poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None, precision=precision)
+    # logging.info("="*30+f" poses dtype: {poses.dtype}")
     poses = poses.data.cpu().numpy()
     # logging.info("="*30+f" poses dtype: {poses.dtype}")
     logging.info(f'poses:{poses.shape}')
@@ -245,7 +256,7 @@ class FoundationPose:
 
 
     start_time_guess_translation = time()
-    center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
+    center = self.guess_translation(depth=depth, mask=ob_mask, K=K, precision=precision)
     logging.info(f"\033[92mguess_translation time: {time()-start_time_guess_translation:.4f}\033[0m")
 
 
@@ -253,11 +264,11 @@ class FoundationPose:
     poses[:,:3,3] = torch.as_tensor(center.reshape(1,3), device='cuda')
 
     start_add_errs = time()
-    add_errs = self.compute_add_err_to_gt_pose(poses)
+    add_errs = self.compute_add_err_to_gt_pose(poses, precision=precision)
     logging.info(f"after viewpoint, add_errs min:{add_errs.min()}")
     logging.info(f"\033[92mcompute_add_err_to_gt_pose time: {time()-start_add_errs:.4f}\033[0m")
 
-    xyz_map = depth2xyzmap(depth, K)
+    xyz_map = depth2xyzmap(depth, K, precision=precision)
     start_time_scorer = time()
     poses, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, xyz_map=xyz_map, glctx=self.glctx, mesh_diameter=self.diameter, iteration=iteration, get_vis=self.debug>=2, precision=precision)
     if vis is not None:
@@ -272,7 +283,7 @@ class FoundationPose:
       imageio.imwrite(f'{self.debug_dir}/vis_score.png', vis)
     logging.info(f"\033[92ms refiner score time: {time()-start_time_scorer:.4f}\033[0m")
 
-    add_errs = self.compute_add_err_to_gt_pose(poses)
+    add_errs = self.compute_add_err_to_gt_pose(poses, precision=precision)
     logging.info(f"final, add_errs min:{add_errs.min()}")
 
     ids = torch.as_tensor(scores).argsort(descending=True)
@@ -292,11 +303,11 @@ class FoundationPose:
     return best_pose.data.cpu().numpy()
 
 
-  def compute_add_err_to_gt_pose(self, poses):
+  def compute_add_err_to_gt_pose(self, poses, precision=None):
     '''
     @poses: wrt. the centered mesh
     '''
-    return -torch.ones(len(poses), device='cuda', dtype=torch.float)
+    return -torch.ones(len(poses), device='cuda', dtype=get_tf_precision(precision))
 
 
   def track_one(self, rgb, depth, K, iteration, extra={}):
