@@ -82,7 +82,7 @@ class PairH5Dataset(torch.utils.data.Dataset):
     H,W = batch.rgbAs.shape[-2:]
     mesh_radius = batch.mesh_diameters.cuda().to(dtype=tf_precision)/2
     tf_to_crops = batch.tf_to_crops.cuda().to(dtype=tf_precision)
-    if precision is None or precision < 32:  # kornia does not support float16
+    if precision is None or precision < 32:  # inverse does not support float16
       crop_to_oris = batch.tf_to_crops.to(dtype=torch.float32).inverse().cuda().to(dtype=tf_precision)  #(B,3,3)
     else:
       crop_to_oris = batch.tf_to_crops.inverse().cuda().to(dtype=tf_precision)  #(B,3,3)
@@ -90,6 +90,7 @@ class PairH5Dataset(torch.utils.data.Dataset):
     batch.Ks = batch.Ks.cuda().to(dtype=tf_precision)
 
     if batch.xyz_mapAs is None:
+      # logging.info("="*30+" None found in mapAs")
       depthAs_ori = kornia.geometry.transform.warp_perspective(batch.depthAs.cuda().expand(bs,-1,-1,-1), crop_to_oris, dsize=(H_ori, W_ori), mode='nearest', align_corners=False)
       batch.xyz_mapAs = depth2xyzmap_batch(depthAs_ori[:,0], batch.Ks, zfar=np.inf).permute(0,3,1,2)  #(B,3,H,W)
       batch.xyz_mapAs = kornia.geometry.transform.warp_perspective(batch.xyz_mapAs, tf_to_crops, dsize=(H,W), mode='nearest', align_corners=False)
@@ -103,6 +104,7 @@ class PairH5Dataset(torch.utils.data.Dataset):
       batch.xyz_mapAs[invalid.expand(bs,3,-1,-1)] = 0
 
     if batch.xyz_mapBs is None:
+      # logging.info("="*30+" None found in mapBs")
       depthBs_ori = kornia.geometry.transform.warp_perspective(batch.depthBs.cuda().to(dtype=tf_precision).expand(bs,-1,-1,-1), crop_to_oris, dsize=(H_ori, W_ori), mode='nearest', align_corners=False)
       batch.xyz_mapBs = depth2xyzmap_batch(depthBs_ori[:,0], batch.Ks, zfar=np.inf).permute(0,3,1,2)  #(B,3,H,W)
       batch.xyz_mapBs = kornia.geometry.transform.warp_perspective(batch.xyz_mapBs, tf_to_crops, dsize=(H,W), mode='nearest', align_corners=False)
@@ -144,7 +146,7 @@ class TripletH5Dataset(PairH5Dataset):
     H,W = batch.rgbAs.shape[-2:]
     mesh_radius = batch.mesh_diameters.cuda().to(dtype=tf_precision)/2
     tf_to_crops = batch.tf_to_crops.cuda().to(dtype=tf_precision)
-    if precision is None or precision < 32:
+    if precision is None or precision < 32:  # inverse does not support float16
       crop_to_oris = batch.tf_to_crops.to(dtype=torch.float32).inverse().cuda().to(dtype=tf_precision)  #(B,3,3)
     else:
       crop_to_oris = batch.tf_to_crops.inverse().cuda().to(dtype=tf_precision)  #(B,3,3)
@@ -152,6 +154,7 @@ class TripletH5Dataset(PairH5Dataset):
     batch.Ks = batch.Ks.cuda().to(dtype=tf_precision)
 
     if batch.xyz_mapAs is None:
+      # logging.info("="*30+" None found in mapAs")
       depthAs_ori = kornia.geometry.transform.warp_perspective(batch.depthAs.cuda().to(dtype=tf_precision).expand(bs,-1,-1,-1), crop_to_oris, dsize=(H_ori, W_ori), mode='nearest', align_corners=False)
       batch.xyz_mapAs = depth2xyzmap_batch(depthAs_ori[:,0], batch.Ks, zfar=np.inf).permute(0,3,1,2)  #(B,3,H,W)
       batch.xyz_mapAs = kornia.geometry.transform.warp_perspective(batch.xyz_mapAs, tf_to_crops, dsize=(H,W), mode='nearest', align_corners=False)
@@ -164,8 +167,10 @@ class TripletH5Dataset(PairH5Dataset):
       batch.xyz_mapAs[invalid.expand(bs,3,-1,-1)] = 0
 
     if batch.xyz_mapBs is None:
+      # logging.info("="*30+" None found in mapBs")
       depthBs_ori = kornia.geometry.transform.warp_perspective(batch.depthBs.cuda().to(dtype=tf_precision).expand(bs,-1,-1,-1), crop_to_oris, dsize=(H_ori, W_ori), mode='nearest', align_corners=False)
-      batch.xyz_mapBs = depth2xyzmap_batch(depthBs_ori[:,0], batch.Ks, zfar=np.inf).permute(0,3,1,2)  #(B,3,H,W)
+      batch.xyz_mapBs = depth2xyzmap_batch(depthBs_ori[:,0], batch.Ks, zfar=np.inf).permute(0,3,1,2).to(dtype=tf_precision)  #(B,3,H,W)
+      # logging.info("="*30+f" batch.xyz_mapBs : {batch.xyz_mapBs.dtype}, tf_to_crops : {tf_to_crops.dtype}")
       batch.xyz_mapBs = kornia.geometry.transform.warp_perspective(batch.xyz_mapBs, tf_to_crops, dsize=(H,W), mode='nearest', align_corners=False)
     batch.xyz_mapBs = batch.xyz_mapBs.cuda().to(dtype=tf_precision)
     invalid = batch.xyz_mapBs[:,2:3]<0.1
@@ -178,12 +183,13 @@ class TripletH5Dataset(PairH5Dataset):
     return batch
 
 
-  def transform_batch(self, batch:BatchPoseData, H_ori, W_ori, bound=1):
-    bs = len(batch.rgbAs)
-    batch.rgbAs = batch.rgbAs.cuda().float()/255.0
-    batch.rgbBs = batch.rgbBs.cuda().float()/255.0
+  def transform_batch(self, batch:BatchPoseData, H_ori, W_ori, bound=1, precision=None):
+    tf_precision = get_tf_precision(precision)
+    # bs = len(batch.rgbAs)
+    batch.rgbAs = batch.rgbAs.cuda().to(tf_precision)/255.0
+    batch.rgbBs = batch.rgbBs.cuda().to(tf_precision)/255.0
 
-    batch = self.transform_depth_to_xyzmap(batch, H_ori, W_ori, bound=bound)
+    batch = self.transform_depth_to_xyzmap(batch, H_ori, W_ori, bound=bound, precision=precision)
     return batch
 
 
